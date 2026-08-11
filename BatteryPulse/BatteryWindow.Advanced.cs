@@ -144,7 +144,12 @@ namespace BatteryPulse
 
         internal void OpenAdvancedDashboard()
         {
-            if (advancedMode || !IsLoaded) return;
+            if (!IsLoaded) return;
+            if (advancedMode)
+            {
+                BringAdvancedToFront();
+                return;
+            }
             bool instantOpen = topBarHostMode;
             if (instantOpen)
             {
@@ -165,7 +170,9 @@ namespace BatteryPulse
                 widgetBounds = new Rect(Left, Top, 390, Height);
             }
 
-            Topmost = false;
+            // Top-bar mode keeps the dashboard above other windows only while it
+            // is open. The compact top bar remains visible above it as before.
+            Topmost = topBarHostMode;
             if (topmostMenu != null) topmostMenu.IsChecked = false;
             MinWidth = 0;
             MaxWidth = double.PositiveInfinity;
@@ -194,6 +201,7 @@ namespace BatteryPulse
                 Height = target.Height;
                 LockAdvancedBounds(target);
                 Show();
+                BringAdvancedToFront();
                 Dispatcher.BeginInvoke(new Action(delegate
                 {
                     if (!advancedMode) return;
@@ -201,6 +209,7 @@ namespace BatteryPulse
                     advancedRoot.IsHitTestVisible = true;
                     advancedDashboard.PrepareForOpen(latestSnapshot, telemetryHistory.Snapshot());
                     advancedDashboard.FocusCurrentPage();
+                    BringAdvancedToFront();
                 }), DispatcherPriority.Loaded);
                 return;
             }
@@ -231,6 +240,8 @@ namespace BatteryPulse
                 advancedMode = false;
                 advancedWindowed = true;
                 WindowState = WindowState.Normal;
+                Topmost = false;
+                if (topmostMenu != null) topmostMenu.IsChecked = false;
                 SetAdvancedSurface(false);
                 dotMesh.Visibility = Visibility.Visible;
                 Hide();
@@ -516,6 +527,16 @@ namespace BatteryPulse
         {
             Topmost = enabled;
             if (topmostMenu != null) topmostMenu.IsChecked = enabled;
+        }
+
+        private void BringAdvancedToFront()
+        {
+            if (!advancedMode) return;
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            if (topBarHostMode) Topmost = true;
+            Show();
+            Activate();
+            if (advancedDashboard != null) advancedDashboard.FocusCurrentPage();
         }
 
         internal void DashboardSetStartup(bool enabled)
