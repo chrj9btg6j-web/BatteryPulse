@@ -60,6 +60,8 @@ namespace BatteryPulse
         private TextBlock overviewSystemNote;
         private TextBlock overviewTemperatureValue;
         private TextBlock overviewTemperatureNote;
+        private TextBlock overviewUsageValue;
+        private TextBlock overviewUsageNote;
         private TextBlock overviewMemoryValue;
         private TextBlock overviewMemoryNote;
         private TextBlock overviewStorageValue;
@@ -68,8 +70,9 @@ namespace BatteryPulse
         private TextBlock overviewBatteryNote;
         private TextBlock overviewLimitValue;
         private TextBlock overviewLimitNote;
-        private StackPanel overviewLimitOptions;
+        private Panel overviewLimitOptions;
         private StackPanel overviewLimitCustomRow;
+        private Border overviewLimitCard;
         private TextBlock batteryCareText;
         private StackPanel overviewAlerts;
         private StackPanel alertsList;
@@ -141,9 +144,7 @@ namespace BatteryPulse
             if (overviewStateValue != null)
             {
                 overviewStateValue.Text = FormatPercent(data.Percent);
-                overviewStateNote.Text = string.IsNullOrWhiteSpace(data.StatusText)
-                    ? (data.IsCharging ? "充電中" : (data.IsAcLine ? "外接電源" : "電池供電"))
-                    : data.StatusText;
+                overviewStateNote.Text = data.IsCharging ? "充電中" : (data.IsAcLine ? "外接電源" : "電池供電");
             }
             UpdateOverviewCards(data);
             UpdateOverviewLimitCard(data);
@@ -408,6 +409,7 @@ namespace BatteryPulse
             metricsRow.Children.Add(OverviewSummaryTile("充電瓦數", "#FF6FC4F2", out overviewChargeValue, out overviewChargeNote));
             metricsRow.Children.Add(OverviewSummaryTile("電腦耗電", "#FF8AC7A8", out overviewSystemValue, out overviewSystemNote));
             metricsRow.Children.Add(OverviewSummaryTile("溫度", "#FFFFC66D", out overviewTemperatureValue, out overviewTemperatureNote));
+            metricsRow.Children.Add(OverviewSummaryTile("使用率", "#FF8DB6E8", out overviewUsageValue, out overviewUsageNote));
             metricsRow.Children.Add(OverviewSummaryTile("記憶體", "#FF9DB7D8", out overviewMemoryValue, out overviewMemoryNote));
             metricsRow.Children.Add(OverviewSummaryTile("儲存空間", "#FF9DB7D8", out overviewStorageValue, out overviewStorageNote));
             metricsRow.Children.Add(OverviewSummaryTile("電池健康", "#FFC6A0FF", out overviewBatteryValue, out overviewBatteryNote));
@@ -503,14 +505,17 @@ namespace BatteryPulse
                     ? (int?)Math.Round(data.ChargeLimitPercent.Value)
                     : null
             };
+            bool showControls = capabilities.Supported && capabilities.CanWrite;
             UpdateBatteryLimitOptions(overviewLimitOptions, capabilities);
             if (overviewLimitCustomRow != null)
-                overviewLimitCustomRow.Visibility = capabilities.Supported && capabilities.CanWrite
+                overviewLimitCustomRow.Visibility = showControls
                     ? Visibility.Visible
                     : Visibility.Collapsed;
+            if (overviewLimitCard != null)
+                overviewLimitCard.Height = showControls ? 216 : 104;
         }
 
-        private void UpdateBatteryLimitOptions(StackPanel options, BatteryLimitCapabilities capabilities)
+        private void UpdateBatteryLimitOptions(Panel options, BatteryLimitCapabilities capabilities)
         {
             if (options == null) return;
             options.Children.Clear();
@@ -689,44 +694,40 @@ namespace BatteryPulse
             {
                 bool hasCharge = data.IsCharging && data.Watts.HasValue && data.Watts.Value > 0;
                 overviewChargeValue.Text = hasCharge ? FormatValue(data.Watts, "0.0", " W") : "--";
-                overviewChargeNote.Text = hasCharge
-                    ? (data.ChargeEtaSeconds.HasValue ? "預估 " + FormatDuration(TimeSpan.FromSeconds(data.ChargeEtaSeconds.Value)) + " 充滿" : "電池吸收功率")
-                    : "目前沒有充電讀值";
+                overviewChargeNote.Text = hasCharge ? "電池吸收" : "無讀值";
             }
             if (overviewSystemValue != null)
             {
                 overviewSystemValue.Text = FormatValue(data.SystemWatts, "0.0", " W");
-                overviewSystemNote.Text = data.SystemWatts.HasValue ? "感測器／電池流向" : "目前沒有耗電讀值";
+                overviewSystemNote.Text = data.SystemWatts.HasValue ? "感測器估算" : "無讀值";
             }
             if (overviewTemperatureValue != null)
             {
                 bool hasCpu = data.CpuTempC.HasValue;
                 bool hasGpu = data.GpuTempC.HasValue;
                 overviewTemperatureValue.Text = FormatTemperaturePair(data.CpuTempC, data.GpuTempC);
-                overviewTemperatureNote.Text = (hasCpu || hasGpu) ? TemperatureOverviewState(data) : "目前沒有溫度讀值";
+                overviewTemperatureNote.Text = (hasCpu || hasGpu) ? TemperatureOverviewState(data) : "無讀值";
+            }
+            if (overviewUsageValue != null)
+            {
+                bool hasCpu = data.CpuUsagePercent.HasValue;
+                bool hasGpu = data.GpuUsagePercent.HasValue;
+                overviewUsageValue.Text = FormatUsagePair(data.CpuUsagePercent, data.GpuUsagePercent);
+                overviewUsageNote.Text = (hasCpu || hasGpu) ? "CPU／GPU 即時" : "無讀值";
             }
             if (overviewMemoryValue != null)
             {
                 overviewMemoryValue.Text = FormatPercent(data.MemoryUsedPercent);
                 overviewMemoryNote.Text = data.MemoryUsedMib.HasValue && data.MemoryTotalMib.HasValue
                     ? FormatMemory(data.MemoryUsedMib.Value, data.MemoryTotalMib.Value)
-                    : "Windows 記憶體資料未取得";
+                    : "無讀值";
             }
             if (overviewStorageValue != null)
             {
                 overviewStorageValue.Text = FormatPercent(data.StorageUsedPercent);
                 overviewStorageNote.Text = data.StorageUsedGiB.HasValue && data.StorageTotalGiB.HasValue
                     ? FormatStorage(data.StorageUsedGiB.Value, data.StorageFreeGiB, data.StorageTotalGiB.Value)
-                    : "系統碟資料未取得";
-            }
-            if (overviewLimitValue != null)
-            {
-                overviewLimitValue.Text = data.ChargeLimitPercent.HasValue
-                    ? FormatPercent(data.ChargeLimitPercent)
-                    : "未讀取";
-                overviewLimitNote.Text = data.ChargeLimitPercent.HasValue
-                    ? (string.IsNullOrWhiteSpace(data.ChargeLimitSource) ? "硬體回報" : data.ChargeLimitSource)
-                    : "由 ASUS 工具／韌體控制";
+                    : "無讀值";
             }
         }
 
@@ -1156,7 +1157,7 @@ namespace BatteryPulse
             };
             panel.Children.Add(overviewLimitNote);
 
-            overviewLimitOptions = new StackPanel
+            overviewLimitOptions = new WrapPanel
             {
                 Orientation = Orientation.Horizontal,
                 Margin = new Thickness(0, 10, 0, 0)
@@ -1179,21 +1180,21 @@ namespace BatteryPulse
             overviewLimitCustomRow.Children.Add(applyCustom);
             panel.Children.Add(overviewLimitCustomRow);
 
-            var root = new Border
+            overviewLimitCard = new Border
             {
                 Width = 310,
+                Height = 104,
                 Margin = new Thickness(0, 0, 10, 10),
                 Padding = new Thickness(16, 14, 16, 13),
-                MinHeight = 216,
                 CornerRadius = new CornerRadius(8),
                 BorderThickness = new Thickness(1),
                 BorderBrush = B("#2BFFFFFF"),
                 Background = B("#17FFFFFF"),
                 Child = panel
             };
-            root.MouseEnter += delegate { root.Background = B("#22FFFFFF"); };
-            root.MouseLeave += delegate { root.Background = B("#17FFFFFF"); };
-            return root;
+            overviewLimitCard.MouseEnter += delegate { overviewLimitCard.Background = B("#22FFFFFF"); };
+            overviewLimitCard.MouseLeave += delegate { overviewLimitCard.Background = B("#17FFFFFF"); };
+            return overviewLimitCard;
         }
 
         private static Border OverviewSummaryTile(string title, string accent, out TextBlock value, out TextBlock note)
@@ -1241,9 +1242,10 @@ namespace BatteryPulse
 
             var root = new Border
             {
+                Width = 220,
+                Height = 108,
                 Margin = new Thickness(0, 0, 10, 10),
                 Padding = new Thickness(16, 14, 16, 13),
-                MinHeight = 104,
                 CornerRadius = new CornerRadius(8),
                 BorderThickness = new Thickness(1),
                 BorderBrush = B("#2BFFFFFF"),
@@ -1665,21 +1667,29 @@ namespace BatteryPulse
         private static string FormatTemperaturePair(double? cpu, double? gpu)
         {
             var values = new List<string>();
-            if (cpu.HasValue) values.Add("CPU " + FormatTemperature(cpu));
-            if (gpu.HasValue) values.Add("GPU " + FormatTemperature(gpu));
-            return values.Count == 0 ? "--" : string.Join("  ·  ", values);
+            if (cpu.HasValue) values.Add("CPU " + cpu.Value.ToString("0", CultureInfo.InvariantCulture) + "°C");
+            if (gpu.HasValue) values.Add("GPU " + gpu.Value.ToString("0", CultureInfo.InvariantCulture) + "°C");
+            return values.Count == 0 ? "--" : string.Join(" · ", values);
+        }
+
+        private static string FormatUsagePair(double? cpu, double? gpu)
+        {
+            var values = new List<string>();
+            if (cpu.HasValue) values.Add("CPU " + cpu.Value.ToString("0", CultureInfo.InvariantCulture) + "%");
+            if (gpu.HasValue) values.Add("GPU " + gpu.Value.ToString("0", CultureInfo.InvariantCulture) + "%");
+            return values.Count == 0 ? "--" : string.Join(" · ", values);
         }
 
         private string TemperatureOverviewState(BatterySnapshot data)
         {
             bool hasCpu = data.CpuTempC.HasValue;
             bool hasGpu = data.GpuTempC.HasValue;
-            if (!hasCpu && !hasGpu) return "尚未取得溫度";
+            if (!hasCpu && !hasGpu) return "無讀值";
             if ((hasCpu && data.CpuTempC.Value >= settings.CpuWarnC) ||
-                (hasGpu && data.GpuTempC.Value >= settings.GpuWarnC)) return "接近警示門檻";
+                (hasGpu && data.GpuTempC.Value >= settings.GpuWarnC)) return "高溫注意";
             if ((hasCpu && data.CpuTempC.Value >= settings.CpuWarnC - 10) ||
-                (hasGpu && data.GpuTempC.Value >= settings.GpuWarnC - 10)) return "接近提醒範圍";
-            return "目前在設定範圍內";
+                (hasGpu && data.GpuTempC.Value >= settings.GpuWarnC - 10)) return "接近提醒";
+            return "正常";
         }
 
         private static string FormatCapacity(double? value)
