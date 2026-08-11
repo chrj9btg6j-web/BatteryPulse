@@ -12,7 +12,9 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Interop;
+using System.Windows.Shapes;
 using Forms = System.Windows.Forms;
+using Path = System.IO.Path;
 
 namespace BatteryPulse
 {
@@ -42,6 +44,7 @@ namespace BatteryPulse
         private readonly TextBlock ramText;
         private readonly TextBlock cpuUsageText;
         private readonly TextBlock gpuUsageText;
+        private readonly Ellipse updateDot;
         private readonly DropShadowEffect shadow;
         private readonly List<Border> layoutSpacers = new List<Border>();
         private AppSettings topBarSettings;
@@ -49,6 +52,7 @@ namespace BatteryPulse
         private bool chargeBlinking;
         private bool powerBlinking;
         private Action openAdvanced;
+        private UpdateInfo updateInfo;
         private Rect lastScreenWorkArea = SystemParameters.WorkArea;
 
         public TopStatusBarWindow()
@@ -88,6 +92,21 @@ namespace BatteryPulse
                 VerticalAlignment = VerticalAlignment.Center,
                 Height = 28,
                 Margin = new Thickness(12, 0, 12, 0)
+            };
+            updateDot = new Ellipse
+            {
+                Width = 7,
+                Height = 7,
+                Fill = Brush("#FFFF4D5A"),
+                Visibility = Visibility.Collapsed,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 0, 0),
+                ToolTip = "有新版本可用"
+            };
+            updateDot.MouseLeftButtonUp += delegate(object sender, MouseButtonEventArgs e)
+            {
+                e.Handled = true;
+                if (updateInfo != null) UpdateService.OpenUrl(updateInfo.ReleaseUrl);
             };
 
             titleText = TextCell(topBarSettings.CustomTitle, 12.5, FontWeights.Medium, "#FFFFFFFF");
@@ -205,6 +224,7 @@ namespace BatteryPulse
                 statusRow.Children.Add(spacer);
                 statusRow.Children.Add(element);
             }
+            statusRow.Children.Add(updateDot);
             ApplyLayoutVisibility();
         }
 
@@ -291,6 +311,25 @@ namespace BatteryPulse
             PlaceAtTopCenter();
             Show();
             Opacity = 1;
+        }
+
+        public void UpdateUpdateStatus(UpdateInfo info)
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(new Action(delegate { UpdateUpdateStatus(info); }));
+                return;
+            }
+
+            updateInfo = info;
+            bool available = info != null && info.IsUpdateAvailable && !string.IsNullOrWhiteSpace(info.ReleaseUrl);
+            updateDot.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+            updateDot.ToolTip = available
+                ? "有新版本 v" + info.LatestVersion + "，點擊開啟更新頁"
+                : "目前沒有新版本";
+            updateDot.BeginAnimation(UIElement.OpacityProperty, null);
+            updateDot.Opacity = available ? 1 : 0;
+            if (available) BeginBlink(updateDot, 0.45, 900);
         }
 
         public void Reposition()
@@ -664,6 +703,7 @@ namespace BatteryPulse
                             host = new BatteryWindow();
                             host.ConfigureTopBarHost(delegate { bar.ShowTopBar(); }, delegate { return bar.GetScreenWorkArea(); });
                             host.SnapshotUpdated += delegate(BatterySnapshot data) { bar.UpdateSnapshot(data); };
+                            host.UpdateUpdated += delegate(UpdateInfo info) { bar.UpdateUpdateStatus(info); };
                             host.Show();
                             host.Hide();
                         }

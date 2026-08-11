@@ -30,8 +30,8 @@ using Point = System.Windows.Point;
 [assembly: AssemblyDescription("Battery, power and temperature desktop dashboard")]
 [assembly: AssemblyCompany("彰化的驕傲")]
 [assembly: AssemblyCopyright("Copyright © 彰化的驕傲 2026")]
-[assembly: AssemblyVersion("2.0.0.0")]
-[assembly: AssemblyFileVersion("2.0.0.0")]
+[assembly: AssemblyVersion("2.1.0.0")]
+[assembly: AssemblyFileVersion("2.1.0.0")]
 
 namespace BatteryPulse
 {
@@ -40,6 +40,7 @@ namespace BatteryPulse
         private const double CollapsedHeight = 194;
         private const double ExpandedHeight = 642;
         private readonly DispatcherTimer refreshTimer;
+        private readonly DispatcherTimer updateTimer;
         private readonly BatteryReader reader;
         private readonly Border shell;
         private readonly Brush compactShellBackground;
@@ -85,7 +86,10 @@ namespace BatteryPulse
         private Point mouseDownPoint;
         private double? smoothedSystemWatts;
         private DateTime lastSettingsSaveAt = DateTime.MinValue;
+        private int updateCheckInProgress;
+        private UpdateInfo latestUpdateInfo;
         internal event Action<BatterySnapshot> SnapshotUpdated;
+        internal event Action<UpdateInfo> UpdateUpdated;
 
         public BatteryWindow()
         {
@@ -207,10 +211,16 @@ namespace BatteryPulse
                 SaveWidgetPlacement();
                 OnAdvancedWindowClosing();
             };
-            Closed += delegate { if (refreshTimer != null) refreshTimer.Stop(); };
+            Closed += delegate
+            {
+                if (refreshTimer != null) refreshTimer.Stop();
+                if (updateTimer != null) updateTimer.Stop();
+            };
 
             refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             refreshTimer.Tick += delegate { RefreshBattery(false); };
+            updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
+            updateTimer.Tick += delegate { CheckForUpdates(); };
             ApplyTextShadow();
         }
 
@@ -533,6 +543,30 @@ namespace BatteryPulse
             InitializeAdvancedData();
             RefreshBattery(false);
             refreshTimer.Start();
+            CheckForUpdates();
+            updateTimer.Start();
+        }
+
+        private void CheckForUpdates()
+        {
+            if (Interlocked.CompareExchange(ref updateCheckInProgress, 1, 0) != 0) return;
+            UpdateService.CheckAsync(settings.UpdateApiUrl, settings.UpdatePageUrl, delegate(UpdateInfo info)
+            {
+                try
+                {
+                    Dispatcher.BeginInvoke(new Action(delegate
+                    {
+                        Interlocked.Exchange(ref updateCheckInProgress, 0);
+                        latestUpdateInfo = info;
+                        if (UpdateUpdated != null) UpdateUpdated(info);
+                        if (advancedDashboard != null) advancedDashboard.UpdateUpdateStatus(info);
+                    }), DispatcherPriority.Background);
+                }
+                catch
+                {
+                    Interlocked.Exchange(ref updateCheckInProgress, 0);
+                }
+            });
         }
 
         private void RefreshBattery(bool animateRefresh)
@@ -1689,6 +1723,8 @@ namespace BatteryPulse
         public double CpuWarnC = 85;
         public double GpuWarnC = 85;
         public bool AlertsEnabled = true;
+        public string UpdateApiUrl = UpdateService.DefaultApiUrl;
+        public string UpdatePageUrl = UpdateService.DefaultPageUrl;
         public string TopBarItems = "charger,charge,percent,power,cpuTemp,gpuTemp,eta,ram,cpuUsage,gpuUsage";
         public string TopBarHiddenItems = "eta,ram,cpuUsage,gpuUsage";
         public double DayWh;
@@ -1746,6 +1782,8 @@ namespace BatteryPulse
                     if (key == "cpuWarnC") settings.CpuWarnC = Math.Max(60, ParseDouble(value));
                     if (key == "gpuWarnC") settings.GpuWarnC = Math.Max(60, ParseDouble(value));
                     if (key == "alertsEnabled") settings.AlertsEnabled = value == "1";
+                    if (key == "updateApiUrl" && !string.IsNullOrWhiteSpace(value)) settings.UpdateApiUrl = value.Trim();
+                    if (key == "updatePageUrl" && !string.IsNullOrWhiteSpace(value)) settings.UpdatePageUrl = value.Trim();
                     if (key == "topBarItems" && !string.IsNullOrWhiteSpace(value)) settings.TopBarItems = value;
                     if (key == "topBarHiddenItems") settings.TopBarHiddenItems = value;
                     if (key == "dayWh") settings.DayWh = ParseDouble(value);
@@ -1779,6 +1817,8 @@ namespace BatteryPulse
                     "cpuWarnC=" + CpuWarnC.ToString("R", CultureInfo.InvariantCulture),
                     "gpuWarnC=" + GpuWarnC.ToString("R", CultureInfo.InvariantCulture),
                     "alertsEnabled=" + (AlertsEnabled ? "1" : "0"),
+                    "updateApiUrl=" + UpdateApiUrl,
+                    "updatePageUrl=" + UpdatePageUrl,
                     "topBarItems=" + TopBarItems,
                     "topBarHiddenItems=" + TopBarHiddenItems,
                     "dayWh=" + DayWh.ToString("R", CultureInfo.InvariantCulture),

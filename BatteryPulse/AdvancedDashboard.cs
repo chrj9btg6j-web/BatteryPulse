@@ -43,6 +43,8 @@ namespace BatteryPulse
         private TextBlock pageTitle;
         private TextBlock pageSubtitle;
         private TextBlock liveTime;
+        private Border updateBanner;
+        private TextBlock updateBannerText;
         private TextBlock sidebarBattery;
         private TextBlock sidebarState;
         private TextBlock pdDetailText;
@@ -85,6 +87,7 @@ namespace BatteryPulse
         private NumericStepper cpuStepper;
         private NumericStepper gpuStepper;
         private BatterySnapshot latest;
+        private UpdateInfo updateInfo;
         private IList<TelemetryPoint> latestPoints = new List<TelemetryPoint>();
         private int currentPage;
         private bool loadingDays;
@@ -111,6 +114,19 @@ namespace BatteryPulse
         public void FocusCurrentPage()
         {
             if (contentHost != null) contentHost.Focus();
+        }
+
+        public void UpdateUpdateStatus(UpdateInfo info)
+        {
+            updateInfo = info;
+            if (updateBanner == null || updateBannerText == null) return;
+
+            bool available = info != null && info.IsUpdateAvailable && !string.IsNullOrWhiteSpace(info.ReleaseUrl);
+            updateBanner.Visibility = available ? Visibility.Visible : Visibility.Collapsed;
+            updateBannerText.Text = available
+                ? "新版本 v" + info.LatestVersion + " · " + DisplayUpdateUrl(info.ReleaseUrl)
+                : string.Empty;
+            updateBanner.ToolTip = available ? info.ReleaseUrl : null;
         }
 
         public void Update(BatterySnapshot data, IList<TelemetryPoint> points)
@@ -305,6 +321,8 @@ namespace BatteryPulse
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 12, 0)
             };
+            updateBanner = BuildUpdateBanner();
+            right.Children.Add(updateBanner);
             right.Children.Add(liveTime);
             right.Children.Add(IconButton("↻", "立即更新", delegate { owner.DashboardRefresh(); }));
             right.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e) { e.Handled = true; };
@@ -325,6 +343,45 @@ namespace BatteryPulse
             Grid.SetRow(contentHost, 1);
             root.Children.Add(contentHost);
             return root;
+        }
+
+        private Border BuildUpdateBanner()
+        {
+            updateBannerText = new TextBlock
+            {
+                Text = string.Empty,
+                Foreground = B("#FF3D454B"),
+                FontSize = 9.5,
+                FontWeight = FontWeights.Medium,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var banner = new Border
+            {
+                Visibility = Visibility.Collapsed,
+                MaxWidth = 260,
+                Padding = new Thickness(9, 5, 9, 5),
+                Margin = new Thickness(0, 0, 10, 0),
+                CornerRadius = new CornerRadius(7),
+                BorderThickness = new Thickness(1),
+                BorderBrush = B("#33908A8A"),
+                Background = B("#22FFFFFF"),
+                Cursor = Cursors.Hand,
+                Child = updateBannerText
+            };
+            banner.MouseLeftButtonUp += delegate(object sender, MouseButtonEventArgs e)
+            {
+                e.Handled = true;
+                if (updateInfo != null) UpdateService.OpenUrl(updateInfo.ReleaseUrl);
+            };
+            return banner;
+        }
+
+        private static string DisplayUpdateUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return string.Empty;
+            return url.Replace("https://", string.Empty).Replace("http://", string.Empty).TrimEnd('/');
         }
 
         private void BuildPages()

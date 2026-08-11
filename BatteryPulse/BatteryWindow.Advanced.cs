@@ -105,6 +105,7 @@ namespace BatteryPulse
             telemetryStore = new TelemetryStore();
             telemetryHistory = new RollingTelemetry(TimeSpan.FromMinutes(30));
             advancedDashboard = new AdvancedDashboard(this, settings, telemetryStore, telemetryHistory);
+            advancedDashboard.UpdateUpdateStatus(latestUpdateInfo);
             return advancedDashboard.Root;
         }
 
