@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Management;
-using Microsoft.Win32;
 using System.Runtime.InteropServices;
 
 namespace BatteryPulse
@@ -49,8 +48,6 @@ namespace BatteryPulse
         private const uint AsusDsts = 0x53545344;
         private const uint AsusDevs = 0x53564544;
         private const uint AsusBatteryLimit = 0x00120057;
-        private const string AsusOptimizationKey = @"SOFTWARE\ASUS\ASUS System Control Interface\AsusOptimization\ASUS Keyboard Hotkeys";
-        private const string AsusOptimizationWowKey = @"SOFTWARE\WOW6432Node\ASUS\ASUS System Control Interface\AsusOptimization\ASUS Keyboard Hotkeys";
         private const uint GenericRead = 0x80000000;
         private const uint GenericWrite = 0x40000000;
         private const uint FileShareRead = 0x00000001;
@@ -96,34 +93,6 @@ namespace BatteryPulse
                 BatteryLimitCapabilities result = ProbeAsusAcpi();
                 if (!result.Supported)
                     result = ProbeAsusWmi();
-
-                // Some current ASUS firmware exposes the writable ATKACPI endpoint
-                // but returns a vendor status word instead of the current percentage.
-                // ASUS System Control Interface keeps the selected ChargingRate in
-                // the machine registry; use it only as a read source, never as a
-                // replacement for the ACPI write path.
-                int? registryPercent = ReadAsusChargingRate();
-                if (registryPercent.HasValue)
-                {
-                    if (!result.Supported)
-                    {
-                        result = new BatteryLimitCapabilities
-                        {
-                            Mode = BatteryLimitControlMode.Threshold,
-                            CanWrite = false,
-                            ProviderName = "ASUS System Control Interface",
-                            Source = "ASUS ChargingRate",
-                            Note = "ASUS 控制介面回報目前充電上限；本程式只能讀取。",
-                            CurrentPercent = registryPercent
-                        };
-                    }
-                    else if (!result.CurrentPercent.HasValue)
-                    {
-                        result.CurrentPercent = registryPercent;
-                        result.Source = result.Source + " + ASUS ChargingRate";
-                        result.Note = "目前限制由 ASUS System Control Interface 回報。";
-                    }
-                }
 
                 result.LastAppliedPercent = lastAppliedPercent;
                 cachedCapabilities = result;
@@ -270,28 +239,6 @@ namespace BatteryPulse
             }
             catch { }
             return Unsupported();
-        }
-
-        private static int? ReadAsusChargingRate()
-        {
-            string[] paths = { AsusOptimizationKey, AsusOptimizationWowKey };
-            foreach (string path in paths)
-            {
-                try
-                {
-                    using (RegistryKey key = Registry.LocalMachine.OpenSubKey(path, false))
-                    {
-                        if (key == null) continue;
-                        object raw = key.GetValue("ChargingRate", null, RegistryValueOptions.DoNotExpandEnvironmentNames);
-                        if (raw == null) continue;
-                        int value = Convert.ToInt32(raw);
-                        if (value >= 40 && value <= 100)
-                            return value;
-                    }
-                }
-                catch { }
-            }
-            return null;
         }
 
         private static bool TrySetAsusAcpi(int percent)

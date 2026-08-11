@@ -68,6 +68,7 @@ namespace BatteryPulse
         private TextBlock overviewBatteryNote;
         private TextBlock overviewLimitValue;
         private TextBlock overviewLimitNote;
+        private StackPanel overviewLimitOptions;
         private TextBlock batteryCareText;
         private readonly List<TextBlock> batteryLimitStatusTexts = new List<TextBlock>();
         private readonly List<StackPanel> batteryLimitOptionPanels = new List<StackPanel>();
@@ -403,7 +404,7 @@ namespace BatteryPulse
             var metricsRow = new WrapPanel
             {
                 Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 0, 0, 2)
+                Margin = new Thickness(0, 0, 0, 10)
             };
             metricsRow.Children.Add(OverviewSummaryTile("目前狀態", "#FF67D9B7", out overviewStateValue, out overviewStateNote));
             metricsRow.Children.Add(OverviewSummaryTile("充電瓦數", "#FF6FC4F2", out overviewChargeValue, out overviewChargeNote));
@@ -574,6 +575,7 @@ namespace BatteryPulse
                     ? (int?)Math.Round(data.ChargeLimitPercent.Value)
                     : null
             };
+            UpdateBatteryLimitOptions(overviewLimitOptions, capabilities);
             for (int i = 0; i < batteryLimitStatusTexts.Count; i++)
                 UpdateBatteryLimitControl(batteryLimitStatusTexts[i], batteryLimitOptionPanels[i], batteryLimitCustomRows[i], capabilities);
         }
@@ -586,9 +588,7 @@ namespace BatteryPulse
                 customRow.Visibility = capabilities.Supported && capabilities.CanWrite ? Visibility.Visible : Visibility.Collapsed;
             if (!capabilities.Supported || !capabilities.CanWrite)
             {
-                status.Text = capabilities.CurrentPercent.HasValue
-                    ? "目前上限 " + capabilities.CurrentPercent.Value.ToString(CultureInfo.InvariantCulture) + "% · " + capabilities.ProviderName + " · 僅讀取"
-                    : "未偵測到充電上限讀值";
+                status.Text = "未偵測到可控制的充電上限介面；請使用筆電原廠工具。";
                 return;
             }
 
@@ -597,7 +597,7 @@ namespace BatteryPulse
                 : capabilities.LastAppliedPercent.HasValue
                     ? "上次套用 " + capabilities.LastAppliedPercent.Value.ToString(CultureInfo.InvariantCulture) + "%"
                     : "尚未讀回目前方案";
-            status.Text = current + " · " + capabilities.ProviderName;
+            status.Text = current + " · " + capabilities.ProviderName + " · 可用方案由韌體確認";
             UpdateBatteryLimitOptions(options, capabilities);
         }
 
@@ -640,21 +640,21 @@ namespace BatteryPulse
             {
                 overviewLimitValue.Text = data.ChargeLimitPercent.HasValue
                     ? FormatPercent(data.ChargeLimitPercent)
-                    : "未讀取";
+                    : "未支援";
                 overviewLimitNote.Text = data.ChargeLimitPercent.HasValue
                     ? "僅讀取 · " + TextOrUnknown(data.ChargeLimitProvider)
-                    : "尚無充電上限讀值";
+                    : "未偵測到充電上限控制";
                 return;
             }
 
             overviewLimitValue.Text = data.ChargeLimitPercent.HasValue
-                ? FormatPercent(data.ChargeLimitPercent)
-                : "未讀取";
+                ? (data.ChargeLimitIsLastApplied ? "上次 " : "目前 ") + FormatPercent(data.ChargeLimitPercent)
+                : "未讀回";
             overviewLimitNote.Text = data.ChargeLimitIsLastApplied
                 ? "上次套用 · " + TextOrUnknown(data.ChargeLimitProvider)
                 : data.ChargeLimitPercent.HasValue
                     ? "目前讀值 · " + TextOrUnknown(data.ChargeLimitProvider)
-                    : "尚無充電上限讀值";
+                    : "讀值未回報 · 請選下方方案";
         }
 
         private void UpdateBatteryLimitCareText(BatterySnapshot data)
@@ -662,16 +662,14 @@ namespace BatteryPulse
             if (batteryCareText == null || data == null) return;
             if (!data.ChargeLimitSupported || !data.ChargeLimitCanWrite)
             {
-                batteryCareText.Text = data.ChargeLimitPercent.HasValue
-                    ? "目前上限 " + FormatPercent(data.ChargeLimitPercent) + " · " + TextOrUnknown(data.ChargeLimitProvider) + " · 僅讀取"
-                    : "尚無充電上限讀值";
+                batteryCareText.Text = "未偵測到可控制的充電上限介面。請使用 ASUS／筆電原廠工具設定，BatteryPulse 不會自行猜測或改寫。";
                 return;
             }
 
             string state = data.ChargeLimitPercent.HasValue
                 ? (data.ChargeLimitIsLastApplied ? "上次套用 " : "韌體回報 ") + FormatPercent(data.ChargeLimitPercent)
                 : "已偵測到可控制介面，尚未讀回目前方案";
-            batteryCareText.Text = state + " · " + data.ChargeLimitProvider;
+            batteryCareText.Text = state + " · " + data.ChargeLimitProvider + "\n可用快捷方案：60%／80%／100%；自訂值需由韌體接受才會套用。";
         }
 
         private FrameworkElement BuildTrendPage()
@@ -809,6 +807,15 @@ namespace BatteryPulse
                 overviewStorageNote.Text = data.StorageUsedGiB.HasValue && data.StorageTotalGiB.HasValue
                     ? FormatStorage(data.StorageUsedGiB.Value, data.StorageFreeGiB, data.StorageTotalGiB.Value)
                     : "系統碟資料未取得";
+            }
+            if (overviewLimitValue != null)
+            {
+                overviewLimitValue.Text = data.ChargeLimitPercent.HasValue
+                    ? FormatPercent(data.ChargeLimitPercent)
+                    : "未讀取";
+                overviewLimitNote.Text = data.ChargeLimitPercent.HasValue
+                    ? (string.IsNullOrWhiteSpace(data.ChargeLimitSource) ? "硬體回報" : data.ChargeLimitSource)
+                    : "由 ASUS 工具／韌體控制";
             }
         }
 
@@ -1249,10 +1256,17 @@ namespace BatteryPulse
             };
             panel.Children.Add(overviewLimitNote);
 
+            overviewLimitOptions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 10, 0, 0)
+            };
+            panel.Children.Add(overviewLimitOptions);
+
             var root = new Border
             {
                 Width = 310,
-                Margin = new Thickness(0, 0, 14, 14),
+                Margin = new Thickness(0, 0, 10, 0),
                 Padding = new Thickness(16, 14, 16, 13),
                 MinHeight = 142,
                 CornerRadius = new CornerRadius(8),
@@ -1311,7 +1325,7 @@ namespace BatteryPulse
 
             var root = new Border
             {
-                Margin = new Thickness(0, 0, 14, 14),
+                Margin = new Thickness(0, 0, 10, 0),
                 Padding = new Thickness(16, 14, 16, 13),
                 MinHeight = 104,
                 CornerRadius = new CornerRadius(8),

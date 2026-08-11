@@ -1,19 +1,20 @@
-# BatteryPulse 編譯輸出
-BatteryPulse/*.exe
-BatteryPulse/*.pdb
+# BatteryPulse local build output and dated release binaries.
+BatteryPulse/dist/
+BatteryPulse/archive/
+BatteryPulse/releases/*/v*/bin/
+BatteryPulse/releases/*/v*/installer/
+BatteryPulse/releases/*/v*/symbols/
+BatteryPulse/build/tools/
 BatteryPulse/installer-output/
 
-# 本機建置工具與套件快取
-BatteryPulse/tools/
-
-# .NET / Visual Studio 暫存資料夾
+# .NET / Visual Studio generated files.
 **/bin/
 **/obj/
 **/.vs/
 *.user
 *.suo
 
-# 系統與編輯器暫存檔
+# Temporary files.
 Thumbs.db
 desktop.ini
 *.tmp

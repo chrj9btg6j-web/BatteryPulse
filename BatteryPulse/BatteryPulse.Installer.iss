@@ -3,13 +3,19 @@
 ; ============================================================================
 ; 使用方式：用 Inno Setup Compiler 開啟本檔案後按 Ctrl+F9 編譯。
 ; 本腳本會產生單一安裝檔，但安裝後會把溫度感測需要的 runtime 放到
-; {app}\LibreHardwareMonitor，讓 CPU/GPU 溫度讀取維持正常。
+; {app}\runtime\LibreHardwareMonitor，讓 CPU/GPU 溫度讀取維持正常。
 ;
 ; TODO 標記是日後可自行替換的欄位。主程式與版本已先代入目前專案版本。
 ; ============================================================================
 
 ; TODO: 若日後把專案放到其他位置，請改成腳本所在資料夾以外的來源路徑。
 #define SourceDir "."
+#define CurrentBinDir SourceDir + "\dist\current"
+#define BrandingDir SourceDir + "\assets\branding"
+#define InstallerAssetsDir SourceDir + "\assets\installer"
+#define RuntimeDir SourceDir + "\runtime\LibreHardwareMonitor"
+#define ReleaseDate "2026-08-11"
+#define ReleaseStamp "20260811"
 ; TODO: 請替換成正式產品名稱；此名稱會同時用於安裝資料夾與捷徑。
 #define MyAppName "筆電狀態快顯"
 ; TODO: 每次發佈新版時更新這兩個版本號。
@@ -19,8 +25,7 @@
 #define MyAppPublisher "彰化的驕傲 / 陳昀"
 ; TODO: 若主執行檔改名，請同步修改這裡。
 #define MainExeName "BatteryPulse.TopBar.exe"
-; TODO: 請替換成你希望交付給別人的安裝檔檔名（不含 .exe）。
-#define OutputName "NotebookStatusPopup-Setup"
+#define OutputName "BatteryPulse-Setup-v" + MyAppVersion + "-" + ReleaseStamp
 
 [Setup]
 ; ---------------------------------------------------------------------------
@@ -55,8 +60,8 @@ VersionInfoProductVersion={#MyAppVersionInfo}
 VersionInfoCopyright=Copyright (c) 2026 {#MyAppPublisher}
 
 WizardStyle=modern
-SetupIconFile={#SourceDir}\BatteryPulse.ProgramLogo.ico
-OutputDir=.\installer-output
+SetupIconFile={#BrandingDir}\BatteryPulse.ProgramLogo.ico
+OutputDir=.\dist\current\installer
 OutputBaseFilename={#OutputName}
 Compression=lzma2
 SolidCompression=yes
@@ -80,10 +85,10 @@ LanguageDetectionMethod=none
 
 [Languages]
 ; 四種語言都使用 Inno Setup 內建的標準按鈕、頁面與解除安裝翻譯。
-Name: "zh_TW"; MessagesFile: "{#SourceDir}\installer-assets\languages\ChineseTraditional.isl"; LicenseFile: "{#SourceDir}\InstallerLicense.zh-TW.txt"
-Name: "zh_CN"; MessagesFile: "{#SourceDir}\installer-assets\languages\ChineseSimplified.isl"; LicenseFile: "{#SourceDir}\InstallerLicense.zh-CN.txt"
-Name: "en"; MessagesFile: "{#SourceDir}\installer-assets\languages\Default.isl"; LicenseFile: "{#SourceDir}\InstallerLicense.en.txt"
-Name: "ja"; MessagesFile: "{#SourceDir}\installer-assets\languages\Japanese.isl"; LicenseFile: "{#SourceDir}\InstallerLicense.ja.txt"
+Name: "zh_TW"; MessagesFile: "{#InstallerAssetsDir}\languages\ChineseTraditional.isl"; LicenseFile: "{#InstallerAssetsDir}\InstallerLicense.zh-TW.txt"
+Name: "zh_CN"; MessagesFile: "{#InstallerAssetsDir}\languages\ChineseSimplified.isl"; LicenseFile: "{#InstallerAssetsDir}\InstallerLicense.zh-CN.txt"
+Name: "en"; MessagesFile: "{#InstallerAssetsDir}\languages\Default.isl"; LicenseFile: "{#InstallerAssetsDir}\InstallerLicense.en.txt"
+Name: "ja"; MessagesFile: "{#InstallerAssetsDir}\languages\Japanese.isl"; LicenseFile: "{#InstallerAssetsDir}\InstallerLicense.ja.txt"
 
 [LangOptions]
 ; LanguageName 是語言選擇對話框中顯示的原生名稱。
@@ -161,12 +166,12 @@ Name: "desktopicon"; Description: "{cm:DesktopShortcut}"; GroupDescription: "{cm
 
 [Files]
 ; 主程式與外部程式圖示。
-Source: "{#SourceDir}\{#MainExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceDir}\BatteryPulse.ProgramLogo.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#CurrentBinDir}\{#MainExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BrandingDir}\BatteryPulse.ProgramLogo.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 ; BatteryPulse 會從這個資料夾載入 LibreHardwareMonitorLib.dll 及其相依檔案，
 ; 用來讀取 CPU/GPU 溫度與硬體感測數值。整個資料夾一起安裝最可靠。
-Source: "{#SourceDir}\LibreHardwareMonitor\*"; DestDir: "{app}\LibreHardwareMonitor"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#RuntimeDir}\*"; DestDir: "{app}\runtime\LibreHardwareMonitor"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; 桌面捷徑與開始選單捷徑依 [Tasks] 選項建立。

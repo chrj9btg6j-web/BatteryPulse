@@ -1937,7 +1937,7 @@ namespace BatteryPulse
             if (initialized && (DateTime.Now - lastInitializeAttempt).TotalSeconds < 10) return;
             initialized = true;
             lastInitializeAttempt = DateTime.Now;
-            string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LibreHardwareMonitor");
+            string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "runtime", "LibreHardwareMonitor");
             string dll = Path.Combine(dir, "LibreHardwareMonitorLib.dll");
             if (!File.Exists(dll)) return;
 
