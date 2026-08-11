@@ -1,0 +1,18 @@
+Notebook Status Popup
+Installation License Template
+
+This is a default license text for the installer. Before distributing the software, replace this file with the license that matches your software policy, third-party components, and distribution model.
+
+1. Scope of use
+The program provides a desktop status view for battery, power, wattage, and hardware temperature information. You may install and use the program in accordance with applicable law and these terms.
+
+2. Third-party components
+This installer may include LibreHardwareMonitor and its dependencies. Each third-party component remains subject to its original license terms. Please review the license information provided with the program.
+
+3. User data
+The uninstaller does not actively delete user settings or historical data. If you want to remove that data, confirm and remove it separately.
+
+4. Disclaimer
+The program is provided as-is. It may not expose complete sensor values on every hardware, firmware, or operating-system configuration. Wattage and temperature information is for reference only and does not replace hardware safeguards or professional judgment.
+
+By selecting “I accept”, you agree to the terms above.
