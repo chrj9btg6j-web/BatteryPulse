@@ -30,8 +30,8 @@ using Point = System.Windows.Point;
 [assembly: AssemblyDescription("Battery, power and temperature desktop dashboard")]
 [assembly: AssemblyCompany("彰化的驕傲")]
 [assembly: AssemblyCopyright("Copyright © 彰化的驕傲 2026")]
-[assembly: AssemblyVersion("2.1.0.0")]
-[assembly: AssemblyFileVersion("2.1.0.0")]
+[assembly: AssemblyVersion("2.2.0.0")]
+[assembly: AssemblyFileVersion("2.2.0.0")]
 
 namespace BatteryPulse
 {
