@@ -280,6 +280,8 @@ namespace BatteryPulse
                 FontSize = 10.5,
                 Margin = new Thickness(0, 5, 0, 0)
             };
+            // 展開頁以功能標題為主，避免重複解釋目前頁面已經呈現的內容。
+            pageSubtitle.Visibility = Visibility.Collapsed;
             heading.Children.Add(pageTitle);
             heading.Children.Add(pageSubtitle);
             header.Children.Add(heading);
