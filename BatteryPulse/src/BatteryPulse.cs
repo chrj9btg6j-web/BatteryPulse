@@ -89,7 +89,6 @@ namespace BatteryPulse
         private int updateCheckInProgress;
         private UpdateInfo latestUpdateInfo;
         internal event Action<BatterySnapshot> SnapshotUpdated;
-        internal event Action<UpdateInfo> UpdateUpdated;
 
         public BatteryWindow()
         {
@@ -558,7 +557,6 @@ namespace BatteryPulse
                     {
                         Interlocked.Exchange(ref updateCheckInProgress, 0);
                         latestUpdateInfo = info;
-                        if (UpdateUpdated != null) UpdateUpdated(info);
                         if (advancedDashboard != null) advancedDashboard.UpdateUpdateStatus(info);
                     }), DispatcherPriority.Background);
                 }
@@ -1215,7 +1213,13 @@ namespace BatteryPulse
         public double? Watts;
         public string BatteryPowerMode;
         public double? SystemWatts;
+        public string SystemWattsSource = "未取得";
         public double EstimatedComponentWatts;
+        // These values are intentionally nullable. A charger label alone is not
+        // enough evidence of its rated or negotiated power.
+        public double? AdapterRatedWatts;
+        public double? PdNegotiatedWatts;
+        public string AdapterPowerSource = "未取得";
         public double? MemoryUsedPercent;
         public double? MemoryUsedMib;
         public double? MemoryTotalMib;
@@ -1250,6 +1254,9 @@ namespace BatteryPulse
         public string SourceNote = "30 秒自動更新";
         public double? ChargeEtaSeconds;
         public string ChargeEtaSource;
+        public double? RuntimeEtaSeconds;
+        public string ChargeForecastState = "未取得";
+        public string RuntimeForecastState = "未取得";
         public double? ChargeLimitPercent;
         public string ChargeLimitSource;
         public bool ChargeLimitSupported;
@@ -1305,9 +1312,17 @@ namespace BatteryPulse
                 else data.Watts = null;
             }
             if ((!data.SystemWatts.HasValue || data.SystemWatts.Value <= 0) && !data.IsAcLine && data.Watts.HasValue && data.Watts.Value > 0)
+            {
                 data.SystemWatts = Math.Abs(data.Watts.Value);
+                data.SystemWattsSource = "Windows BatteryStatus / DischargeRate";
+            }
             if ((!data.SystemWatts.HasValue || data.SystemWatts.Value <= 0) && data.EstimatedComponentWatts > 0)
+            {
                 data.SystemWatts = data.EstimatedComponentWatts;
+                data.SystemWattsSource = "LibreHardwareMonitor 元件功率估算";
+            }
+            if (!data.SystemWatts.HasValue || data.SystemWatts.Value <= 0)
+                data.SystemWattsSource = "未取得";
         }
 
         private static void ReadWmiBattery(BatterySnapshot data)
@@ -1344,7 +1359,11 @@ namespace BatteryPulse
                     data.Watts = NormalizeWatts(dischargeMw.Value);
                     data.BatteryPowerMode = "放電";
                     data.IsCharging = false;
-                    if (data.Watts.Value > 0) data.SystemWatts = data.Watts;
+                    if (data.Watts.Value > 0)
+                    {
+                        data.SystemWatts = data.Watts;
+                        data.SystemWattsSource = "Windows BatteryStatus / DischargeRate";
+                    }
                 }
                 if (!data.Watts.HasValue && currentMw.HasValue && currentMw.Value > 0 && (data.IsCharging || !data.IsAcLine))
                 {
@@ -2111,7 +2130,11 @@ namespace BatteryPulse
                 data.Watts = watts;
                 if (discharge || (!data.IsAcLine && haystack.IndexOf("power", StringComparison.Ordinal) >= 0))
                 {
-                    if (watts > 0) data.SystemWatts = watts;
+                    if (watts > 0)
+                    {
+                        data.SystemWatts = watts;
+                        data.SystemWattsSource = "LibreHardwareMonitor 電池功率感測器";
+                    }
                 }
                 return;
             }
@@ -2199,12 +2222,14 @@ namespace BatteryPulse
             {
                 data.ChargerType = "USB-PD";
                 data.ChargerTypeSource = "LibreHardwareMonitor " + (string.IsNullOrWhiteSpace(sensorName) ? "Power sensor" : sensorName);
+                data.AdapterPowerSource = data.ChargerTypeSource;
                 return true;
             }
             if (isOriginalAdapter && !isBatterySignal)
             {
                 data.ChargerType = "原廠充電器";
                 data.ChargerTypeSource = "LibreHardwareMonitor " + (string.IsNullOrWhiteSpace(sensorName) ? "Power sensor" : sensorName);
+                data.AdapterPowerSource = data.ChargerTypeSource;
                 return true;
             }
             return false;
@@ -2217,6 +2242,7 @@ namespace BatteryPulse
             {
                 data.ChargerType = "未接電";
                 data.ChargerTypeSource = "Windows PowerStatus";
+                data.AdapterPowerSource = data.ChargerTypeSource;
                 return;
             }
             if (!string.Equals(data.ChargerType, "未知", StringComparison.OrdinalIgnoreCase) &&
@@ -2227,6 +2253,7 @@ namespace BatteryPulse
             {
                 data.ChargerType = cachedType;
                 data.ChargerTypeSource = cachedSource;
+                data.AdapterPowerSource = cachedSource;
                 if ((DateTime.Now - lastPnpRead).TotalSeconds >= 12 &&
                     Interlocked.CompareExchange(ref pnpReadInProgress, 1, 0) == 0)
                 {

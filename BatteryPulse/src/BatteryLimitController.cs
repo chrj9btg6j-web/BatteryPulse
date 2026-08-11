@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Management;
+using Microsoft.Win32;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace BatteryPulse
 {
@@ -48,6 +50,7 @@ namespace BatteryPulse
         private const uint AsusDsts = 0x53545344;
         private const uint AsusDevs = 0x53564544;
         private const uint AsusBatteryLimit = 0x00120057;
+        private const string AsusChargeLimitRegistryPath = "SOFTWARE\\ASUS\\ASUS System Control Interface\\AsusOptimization\\ASUS Keyboard Hotkeys";
         private const uint GenericRead = 0x80000000;
         private const uint GenericWrite = 0x40000000;
         private const uint FileShareRead = 0x00000001;
@@ -58,6 +61,7 @@ namespace BatteryPulse
         private static BatteryLimitCapabilities cachedCapabilities;
         private static DateTime cachedAt = DateTime.MinValue;
         private static int? lastAppliedPercent;
+        private static int? confirmedWritePercent;
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern IntPtr CreateFile(
@@ -93,7 +97,18 @@ namespace BatteryPulse
                 BatteryLimitCapabilities result = ProbeAsusAcpi();
                 if (!result.Supported)
                     result = ProbeAsusWmi();
+                if (!result.Supported)
+                    result = ProbeAsusRegistry();
 
+                // Some ASUS generations expose the current limit only through
+                // the System Control Interface registry. If the ACPI/WMI write
+                // was accepted in this process, prefer that hardware-confirmed
+                // state over a stale registry value.
+                if (confirmedWritePercent.HasValue && result.Supported && result.CanWrite)
+                {
+                    result.CurrentPercent = confirmedWritePercent;
+                    result.Source = result.ProviderName + " DEVS 寫入確認";
+                }
                 result.LastAppliedPercent = lastAppliedPercent;
                 cachedCapabilities = result;
                 cachedAt = DateTime.UtcNow;
@@ -111,13 +126,13 @@ namespace BatteryPulse
             data.ChargeLimitProvider = capabilities.ProviderName;
             data.ChargeLimitSource = capabilities.Source;
             data.ChargeLimitOptions = capabilities.Thresholds ?? new int[0];
-            data.ChargeLimitPercent = capabilities.CurrentPercent ?? capabilities.LastAppliedPercent;
-            data.ChargeLimitIsLastApplied = !capabilities.CurrentPercent.HasValue && capabilities.LastAppliedPercent.HasValue;
+            // Only expose a value that the firmware/driver reported now.
+            // A locally remembered setting is not proof that the limit is active.
+            data.ChargeLimitPercent = capabilities.CurrentPercent;
+            data.ChargeLimitIsLastApplied = false;
             data.ChargeLimitStateNote = capabilities.CurrentPercent.HasValue
-                ? "韌體回報目前方案"
-                : capabilities.LastAppliedPercent.HasValue
-                    ? "本程式上次套用方案"
-                    : capabilities.Note;
+                ? (capabilities.Source.IndexOf("寫入確認", StringComparison.Ordinal) >= 0 ? "控制介面已確認" : "目前讀值")
+                : "--";
         }
 
         public static void RestoreLastApplied(int? percent)
@@ -151,14 +166,46 @@ namespace BatteryPulse
                 if (!success)
                     return Failure("韌體拒絕這個方案，或 ASUS 控制介面目前不可用；未變更設定。");
 
-                lastAppliedPercent = percent;
-                cachedCapabilities.LastAppliedPercent = percent;
-                cachedCapabilities.CurrentPercent = null;
+                // ASUS ACPI/WMI returns a success code for DEVS, but some models
+                // do not expose the newly written 100% state through DSTS.
+                // Sync the optional registry value when permissions allow it,
+                // then use read-back when available without making it mandatory.
+                bool registrySynced = TrySetAsusRegistryLimit(percent);
+                bool readBackMatches = false;
+                confirmedWritePercent = null;
+                BatteryLimitCapabilities verified = null;
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    if (attempt > 0) Thread.Sleep(150);
+                    cachedCapabilities = null;
+                    cachedAt = DateTime.MinValue;
+                    verified = GetCapabilities();
+                    if (verified.CurrentPercent.HasValue && verified.CurrentPercent.Value == percent)
+                    {
+                        readBackMatches = true;
+                        break;
+                    }
+                }
+
+                confirmedWritePercent = percent;
+                if (verified == null) verified = capabilities;
+                verified.CurrentPercent = percent;
+                verified.Source = readBackMatches || registrySynced
+                    ? verified.Source
+                    : provider + " DEVS 寫入確認";
+                verified.LastAppliedPercent = null;
+                cachedCapabilities = verified;
+                cachedAt = DateTime.UtcNow;
+
+                // Keep the setting for backward-compatible preferences, but never
+                // use it as a displayed current value.
+                lastAppliedPercent = null;
+                cachedCapabilities.LastAppliedPercent = null;
                 return new BatteryLimitApplyResult
                 {
                     Success = true,
                     AppliedPercent = percent,
-                    Message = percent >= 100 ? "已套用 100%，充電限制已關閉。" : "已套用 " + percent + "% 充電上限。"
+                    Message = percent >= 100 ? "ASUS 控制介面已接受 100%，充電限制已關閉。" : "ASUS 控制介面已接受 " + percent + "% 充電上限。"
                 };
             }
         }
@@ -184,16 +231,21 @@ namespace BatteryPulse
                 if (!TryCallAsus(handle, AsusDsts, BuildDeviceArguments(AsusBatteryLimit), out raw))
                     return Unsupported();
 
-                int value = raw - 65536;
+                int? current = DecodeLimitValue(raw);
+                bool fromRegistry = !current.HasValue;
+                if (fromRegistry)
+                    current = ReadAsusRegistryLimit();
                 return new BatteryLimitCapabilities
                 {
                     Mode = BatteryLimitControlMode.Threshold,
                     CanWrite = true,
                     ProviderName = "ASUS ACPI",
-                    Source = "ASUS ATKACPI BatteryLimit",
-                    Note = "可用方案：60／80／100%；也可嘗試自訂 40%～100%。",
+                    Source = fromRegistry ? "ASUS System Control Interface 登錄設定" : "ASUS ATKACPI BatteryLimit",
+                    Note = fromRegistry
+                        ? "ACPI 已偵測到可控制介面；目前值採 ASUS System Control Interface 登錄設定。"
+                        : "可用方案由 ASUS 韌體決定；目前讀值來自 ATKACPI。",
                     Thresholds = new[] { 60, 80, 100 },
-                    CurrentPercent = value >= 40 && value <= 100 ? (int?)value : null
+                    CurrentPercent = current
                 };
             }
             catch
@@ -223,22 +275,101 @@ namespace BatteryPulse
                         if (statusObject == null) continue;
                         int raw = Convert.ToInt32(statusObject);
                         if (raw == 0) continue;
-                        int value = raw - 65536;
+                        int? current = DecodeLimitValue(raw);
+                        bool fromRegistry = !current.HasValue;
+                        if (fromRegistry)
+                            current = ReadAsusRegistryLimit();
                         return new BatteryLimitCapabilities
                         {
                             Mode = BatteryLimitControlMode.Threshold,
                             CanWrite = true,
                             ProviderName = "ASUS WMI",
-                            Source = "ASUS AsusAtkWmi_WMNB",
-                            Note = "可用方案：60／80／100%；實際可接受值由韌體確認。",
+                            Source = fromRegistry ? "ASUS System Control Interface 登錄設定" : "ASUS AsusAtkWmi_WMNB",
+                            Note = fromRegistry
+                                ? "WMI 已偵測到可控制介面；目前值採 ASUS System Control Interface 登錄設定。"
+                                : "可用方案由 ASUS 韌體決定；目前讀值來自 WMI。",
                             Thresholds = new[] { 60, 80, 100 },
-                            CurrentPercent = value >= 40 && value <= 100 ? (int?)value : null
+                            CurrentPercent = current
                         };
                     }
                 }
             }
             catch { }
             return Unsupported();
+        }
+
+        private static BatteryLimitCapabilities ProbeAsusRegistry()
+        {
+            int? current = ReadAsusRegistryLimit();
+            if (!current.HasValue) return Unsupported();
+
+            return new BatteryLimitCapabilities
+            {
+                Mode = BatteryLimitControlMode.Threshold,
+                CanWrite = false,
+                ProviderName = "ASUS System Control Interface",
+                Source = "Windows Registry",
+                Note = "目前值來自 ASUS System Control Interface；本程式未取得可寫入的 ACPI／WMI 介面。",
+                CurrentPercent = current,
+                Thresholds = new int[0]
+            };
+        }
+
+        private static int? ReadAsusRegistryLimit()
+        {
+            try
+            {
+                using (RegistryKey key = Registry.LocalMachine.OpenSubKey(AsusChargeLimitRegistryPath, false))
+                {
+                    if (key == null) return null;
+                    object raw = key.GetValue("ChargingRate", null);
+                    if (raw == null) return null;
+                    int value = Convert.ToInt32(raw);
+                    return value >= 40 && value <= 100 ? (int?)value : null;
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool TrySetAsusRegistryLimit(int percent)
+        {
+            try
+            {
+                using (RegistryKey key = Registry.LocalMachine.OpenSubKey(AsusChargeLimitRegistryPath, true))
+                {
+                    if (key == null) return false;
+                    key.SetValue("ChargingRate", percent, RegistryValueKind.DWord);
+                    return true;
+                }
+            }
+            catch
+            {
+                // Direct ACPI/WMI control can still succeed for non-elevated users.
+                return false;
+            }
+        }
+
+        private static int? DecodeLimitValue(int raw)
+        {
+            int[] candidates =
+            {
+                raw,
+                raw - 65536,
+                raw & 0xFFFF,
+                (raw >> 16) & 0xFFFF,
+                raw & 0xFF
+            };
+
+            foreach (int candidate in candidates)
+            {
+                if (candidate >= 40 && candidate <= 100)
+                    return candidate;
+            }
+
+            return null;
         }
 
         private static bool TrySetAsusAcpi(int percent)

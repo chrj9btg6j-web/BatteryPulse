@@ -130,6 +130,7 @@ namespace BatteryPulse
         private void RecordTelemetryAndUpdateAdvanced(BatterySnapshot data)
         {
             latestSnapshot = data;
+            BatteryForecast.Apply(data, telemetryHistory == null ? new List<TelemetryPoint>() : telemetryHistory.Snapshot());
             TelemetryPoint point = TelemetryPoint.FromSnapshot(data);
             telemetryHistory.Add(point);
             IList<TelemetryPoint> points = telemetryHistory.Snapshot();
@@ -556,6 +557,166 @@ namespace BatteryPulse
         {
             ResetEnergy(true, true);
             if (latestSnapshot != null) advancedDashboard.Update(latestSnapshot, telemetryHistory.Snapshot());
+        }
+    }
+
+    public static class BatteryForecast
+    {
+        private const double HistoryMinutes = 10;
+        private const double ReservePercent = 5;
+
+        public static void Apply(BatterySnapshot data, IList<TelemetryPoint> history)
+        {
+            if (data == null) return;
+
+            data.ChargeEtaSeconds = null;
+            data.RuntimeEtaSeconds = null;
+            data.ChargeEtaSource = null;
+            data.ChargeForecastState = "資料不足";
+            data.RuntimeForecastState = "資料不足";
+
+            double? fullWh = data.FullChargeCapacityMwh.HasValue && data.FullChargeCapacityMwh.Value > 0
+                ? data.FullChargeCapacityMwh.Value / 1000.0
+                : (double?)null;
+            double? percent = data.Percent.HasValue && data.Percent.Value >= 0 && data.Percent.Value <= 100
+                ? data.Percent
+                : (double?)null;
+            double targetPercent = TargetPercent(data);
+            double? chargeRate = AverageChargeRate(data, history);
+            double? dischargeRate = AverageDischargeRate(data, history);
+            double? systemRate = AverageSystemRate(data, history);
+
+            bool reachedTarget = percent.HasValue && percent.Value >= targetPercent - 0.5;
+            if (reachedTarget)
+            {
+                data.ChargeEtaSeconds = 0;
+                data.ChargeForecastState = targetPercent < 100 ? "已達上限" : "已充滿";
+                data.ChargeEtaSource = "電量已達估算目標";
+            }
+            else if (!data.IsAcLine)
+            {
+                data.ChargeForecastState = "未接電";
+            }
+            else if (IsDischarging(data))
+            {
+                data.ChargeForecastState = "供電不足";
+            }
+            else if (data.IsCharging && fullWh.HasValue && percent.HasValue)
+            {
+                double remainingPercent = targetPercent - percent.Value;
+                if (chargeRate.HasValue && chargeRate.Value > 0)
+                {
+                    double remainingWh = fullWh.Value * remainingPercent / 100.0;
+                    double taperFactor = percent.Value >= 90 ? 0.50 : (percent.Value >= 80 ? 0.62 : 0.72);
+                    double effectiveRate = chargeRate.Value * taperFactor;
+                    data.ChargeEtaSeconds = ClampSeconds(remainingWh / effectiveRate * 3600.0, 300, 172800);
+                    data.ChargeForecastState = "充電中";
+                    data.ChargeEtaSource = "最近 10 分鐘電池淨流入 · 保守修正";
+                }
+                else
+                {
+                    data.ChargeForecastState = "資料不足";
+                    data.ChargeEtaSource = "尚無足夠的電池淨流入資料";
+                }
+            }
+            else if (data.IsAcLine)
+            {
+                data.ChargeForecastState = "資料不足";
+                data.ChargeEtaSource = "尚未確認充電流向";
+            }
+
+            if (fullWh.HasValue && percent.HasValue)
+            {
+                double availableWh = fullWh.Value * Math.Max(0, percent.Value - ReservePercent) / 100.0;
+                double? effectiveDischargeRate = (!data.IsAcLine || IsDischarging(data)) && dischargeRate.HasValue
+                    ? dischargeRate.Value * 1.10
+                    : (systemRate.HasValue ? systemRate.Value * 1.15 : (double?)null);
+                if (availableWh > 0 && effectiveDischargeRate.HasValue && effectiveDischargeRate.Value > 0)
+                {
+                    data.RuntimeEtaSeconds = ClampSeconds(availableWh / effectiveDischargeRate.Value * 3600.0, 300, 86400);
+                    data.RuntimeForecastState = "可用時間";
+                }
+            }
+        }
+
+        private static double TargetPercent(BatterySnapshot data)
+        {
+            if (data != null && data.ChargeLimitPercent.HasValue && data.ChargeLimitPercent.Value > 0 && data.ChargeLimitPercent.Value < 100)
+                return data.ChargeLimitPercent.Value;
+            return 100;
+        }
+
+        private static bool IsDischarging(BatterySnapshot data)
+        {
+            return data != null && string.Equals(data.BatteryPowerMode, "放電", StringComparison.OrdinalIgnoreCase) &&
+                data.Watts.HasValue && data.Watts.Value > 0;
+        }
+
+        private static double? AverageChargeRate(BatterySnapshot data, IList<TelemetryPoint> history)
+        {
+            var values = Collect(history, delegate(TelemetryPoint point)
+            {
+                return point.IsAcLine && string.Equals(point.BatteryMode, "充電", StringComparison.OrdinalIgnoreCase) &&
+                    point.BatteryWatts.HasValue && point.BatteryWatts.Value > 0;
+            }, delegate(TelemetryPoint point) { return point.BatteryWatts.Value; });
+            if (data != null && data.IsAcLine && data.IsCharging && data.Watts.HasValue && data.Watts.Value > 0)
+                values.Add(data.Watts.Value);
+            return RobustAverage(values);
+        }
+
+        private static double? AverageDischargeRate(BatterySnapshot data, IList<TelemetryPoint> history)
+        {
+            var values = Collect(history, delegate(TelemetryPoint point)
+            {
+                return string.Equals(point.BatteryMode, "放電", StringComparison.OrdinalIgnoreCase) &&
+                    point.BatteryWatts.HasValue && point.BatteryWatts.Value > 0;
+            }, delegate(TelemetryPoint point) { return point.BatteryWatts.Value; });
+            if (data != null && IsDischarging(data)) values.Add(data.Watts.Value);
+            return RobustAverage(values);
+        }
+
+        private static double? AverageSystemRate(BatterySnapshot data, IList<TelemetryPoint> history)
+        {
+            var values = Collect(history, delegate(TelemetryPoint point)
+            {
+                return point.SystemWatts.HasValue && point.SystemWatts.Value > 0;
+            }, delegate(TelemetryPoint point) { return point.SystemWatts.Value; });
+            if (data != null && data.SystemWatts.HasValue && data.SystemWatts.Value > 0)
+                values.Add(data.SystemWatts.Value);
+            return RobustAverage(values);
+        }
+
+        private static List<double> Collect(IList<TelemetryPoint> history, Func<TelemetryPoint, bool> filter, Func<TelemetryPoint, double> selector)
+        {
+            var values = new List<double>();
+            DateTime cutoff = DateTime.Now.AddMinutes(-HistoryMinutes);
+            if (history == null) return values;
+            foreach (TelemetryPoint point in history)
+            {
+                if (point == null || point.At < cutoff || !filter(point)) continue;
+                double value = selector(point);
+                if (value > 0 && value < 500) values.Add(value);
+            }
+            return values;
+        }
+
+        private static double? RobustAverage(List<double> values)
+        {
+            if (values == null || values.Count == 0) return null;
+            values.Sort();
+            int trim = values.Count >= 5 ? values.Count / 5 : 0;
+            int start = trim;
+            int end = values.Count - trim;
+            if (end <= start) { start = 0; end = values.Count; }
+            double sum = 0;
+            for (int i = start; i < end; i++) sum += values[i];
+            return sum / Math.Max(1, end - start);
+        }
+
+        private static double ClampSeconds(double seconds, double minimum, double maximum)
+        {
+            if (double.IsNaN(seconds) || double.IsInfinity(seconds)) return minimum;
+            return Math.Max(minimum, Math.Min(maximum, seconds));
         }
     }
 
