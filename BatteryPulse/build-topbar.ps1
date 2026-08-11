@@ -25,7 +25,7 @@ try {
         /reference:System.dll /reference:System.Core.dll /reference:System.Management.dll `
         /reference:System.Windows.Forms.dll /reference:Microsoft.VisualBasic.dll `
         "/reference:$winbase" "/reference:$pcore" "/reference:$pframe" "/reference:$systemXaml" `
-        BatteryPulse.cs BatteryWindow.Advanced.cs AdvancedDashboard.cs PerformanceReader.cs TopStatusBarWindow.cs
+        BatteryPulse.cs BatteryWindow.Advanced.cs AdvancedDashboard.cs PerformanceReader.cs BatteryLimitController.cs TopStatusBarWindow.cs
     if ($LASTEXITCODE -ne 0) {
         throw "BatteryPulse.TopBar 編譯失敗，錯誤碼：$LASTEXITCODE"
     }

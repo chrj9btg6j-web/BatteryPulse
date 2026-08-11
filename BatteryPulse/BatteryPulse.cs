@@ -104,6 +104,7 @@ namespace BatteryPulse
             SnapsToDevicePixels = true;
 
             settings = AppSettings.Load();
+            BatteryLimitController.RestoreLastApplied(settings.BatteryLimitHasApplied ? (int?)settings.BatteryLimitPercent : null);
             reader = new BatteryReader();
             shellScale = new ScaleTransform(1, 1);
 
@@ -1217,6 +1218,13 @@ namespace BatteryPulse
         public string ChargeEtaSource;
         public double? ChargeLimitPercent;
         public string ChargeLimitSource;
+        public bool ChargeLimitSupported;
+        public bool ChargeLimitCanWrite;
+        public string ChargeLimitMode;
+        public string ChargeLimitProvider;
+        public int[] ChargeLimitOptions = new int[0];
+        public bool ChargeLimitIsLastApplied;
+        public string ChargeLimitStateNote;
         public DateTime ReadAt = DateTime.Now;
     }
 
@@ -1248,6 +1256,7 @@ namespace BatteryPulse
             FinalizePower(data);
             performanceReader.Read(data);
             ChargerTypeDetector.Enrich(data);
+            BatteryLimitController.Enrich(data);
             if (data.GpuTempC.HasValue) data.GpuStatus = "運作中";
             data.SourceNote = SourceNote(data);
             return data;
@@ -1675,6 +1684,8 @@ namespace BatteryPulse
         public double WindowTop;
         public bool WidgetExpanded;
         public double PdWatts = 100;
+        public int BatteryLimitPercent = 80;
+        public bool BatteryLimitHasApplied;
         public double CpuWarnC = 85;
         public double GpuWarnC = 85;
         public bool AlertsEnabled = true;
@@ -1730,6 +1741,8 @@ namespace BatteryPulse
                     if (key == "widgetExpanded") settings.WidgetExpanded = value == "1";
                     if (key == "expanded") settings.WidgetExpanded = value == "1";
                     if (key == "pdWatts") settings.PdWatts = Math.Max(20, ParseDouble(value));
+                    if (key == "batteryLimitPercent") settings.BatteryLimitPercent = (int)Math.Max(40, Math.Min(100, ParseDouble(value)));
+                    if (key == "batteryLimitHasApplied") settings.BatteryLimitHasApplied = value == "1";
                     if (key == "cpuWarnC") settings.CpuWarnC = Math.Max(60, ParseDouble(value));
                     if (key == "gpuWarnC") settings.GpuWarnC = Math.Max(60, ParseDouble(value));
                     if (key == "alertsEnabled") settings.AlertsEnabled = value == "1";
@@ -1761,6 +1774,8 @@ namespace BatteryPulse
                     "widgetExpanded=" + (WidgetExpanded ? "1" : "0"),
                     "expanded=" + (WidgetExpanded ? "1" : "0"),
                     "pdWatts=" + PdWatts.ToString("R", CultureInfo.InvariantCulture),
+                    "batteryLimitPercent=" + BatteryLimitPercent.ToString(CultureInfo.InvariantCulture),
+                    "batteryLimitHasApplied=" + (BatteryLimitHasApplied ? "1" : "0"),
                     "cpuWarnC=" + CpuWarnC.ToString("R", CultureInfo.InvariantCulture),
                     "gpuWarnC=" + GpuWarnC.ToString("R", CultureInfo.InvariantCulture),
                     "alertsEnabled=" + (AlertsEnabled ? "1" : "0"),

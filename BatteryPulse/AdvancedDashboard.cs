@@ -67,6 +67,9 @@ namespace BatteryPulse
         private TextBlock overviewLimitValue;
         private TextBlock overviewLimitNote;
         private TextBlock batteryCareText;
+        private readonly List<TextBlock> batteryLimitStatusTexts = new List<TextBlock>();
+        private readonly List<StackPanel> batteryLimitOptionPanels = new List<StackPanel>();
+        private readonly List<StackPanel> batteryLimitCustomRows = new List<StackPanel>();
         private StackPanel overviewAlerts;
         private StackPanel alertsList;
         private StackPanel dailyList;
@@ -128,6 +131,8 @@ namespace BatteryPulse
                     : data.StatusText;
             }
             UpdateOverviewCards(data);
+            UpdateOverviewLimitCard(data);
+            UpdateBatteryLimitControls(data);
 
             SetMetric("battery", FormatPercent(data.Percent), data.StatusText);
             SetMetric("system", FormatValue(data.SystemWatts, "0.0", " W"), data.SystemWatts.HasValue ? "感測器估算" : "沒有可用讀值");
@@ -137,6 +142,7 @@ namespace BatteryPulse
 
             UpdatePower(data);
             UpdateBattery(data);
+            UpdateBatteryLimitCareText(data);
             UpdateTemperatureSources(data);
             UpdateAlerts(data, latestPoints);
 
@@ -417,8 +423,178 @@ namespace BatteryPulse
             Grid.SetColumn(identity, 1);
             split.Children.Add(identity);
             body.Children.Add(split);
+            body.Children.Add(BuildBatteryLimitControlBand());
             body.Children.Add(InformationBand("充電上限／電池保護", "#FF8AC7A8", out batteryCareText));
             return PageScroll(body);
+        }
+
+        private Border BuildBatteryLimitControlBand()
+        {
+            var panel = new StackPanel();
+            var heading = new StackPanel { Orientation = Orientation.Horizontal };
+            heading.Children.Add(new Border
+            {
+                Width = 5,
+                Height = 5,
+                CornerRadius = new CornerRadius(3),
+                Background = B("#FF8AC7A8"),
+                Margin = new Thickness(0, 5, 8, 0),
+                VerticalAlignment = VerticalAlignment.Top
+            });
+            heading.Children.Add(new TextBlock
+            {
+                Text = "充電上限快捷開關",
+                Foreground = B("#FFF2F7F5"),
+                FontSize = 11.5,
+                FontWeight = FontWeights.SemiBold
+            });
+            panel.Children.Add(heading);
+
+            var status = new TextBlock
+            {
+                Text = "偵測中…",
+                Foreground = B("#FFC3D0CB"),
+                FontSize = 10.5,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(13, 10, 0, 0)
+            };
+            panel.Children.Add(status);
+
+            var options = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(13, 10, 0, 0)
+            };
+            panel.Children.Add(options);
+
+            var customRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(13, 10, 0, 0)
+            };
+            var customStepper = new NumericStepper(settings.BatteryLimitPercent, 40, 100, 1, "%");
+            customRow.Children.Add(customStepper.Root);
+            customRow.Children.Add(ActionButton("套用自訂", delegate
+            {
+                ApplyBatteryLimit((int)Math.Round(customStepper.Value));
+            }));
+            panel.Children.Add(customRow);
+
+            batteryLimitStatusTexts.Add(status);
+            batteryLimitOptionPanels.Add(options);
+            batteryLimitCustomRows.Add(customRow);
+            UpdateBatteryLimitControl(status, options, customRow, BatteryLimitController.GetCapabilities());
+
+            return new Border
+            {
+                Padding = new Thickness(16),
+                Margin = new Thickness(0, 0, 10, 22),
+                CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1),
+                BorderBrush = B("#27FFFFFF"),
+                Background = B("#13FFFFFF"),
+                Child = panel
+            };
+        }
+
+        private void UpdateBatteryLimitControls(BatterySnapshot data)
+        {
+            if (data == null) return;
+            var capabilities = new BatteryLimitCapabilities
+            {
+                Mode = string.Equals(data.ChargeLimitMode, BatteryLimitControlMode.Threshold.ToString(), StringComparison.Ordinal)
+                    ? BatteryLimitControlMode.Threshold
+                    : BatteryLimitControlMode.Unsupported,
+                CanWrite = data.ChargeLimitCanWrite,
+                ProviderName = data.ChargeLimitProvider,
+                Source = data.ChargeLimitSource,
+                Note = data.ChargeLimitStateNote,
+                Thresholds = data.ChargeLimitOptions ?? new int[0],
+                CurrentPercent = !data.ChargeLimitIsLastApplied && data.ChargeLimitPercent.HasValue
+                    ? (int?)Math.Round(data.ChargeLimitPercent.Value)
+                    : null,
+                LastAppliedPercent = data.ChargeLimitIsLastApplied && data.ChargeLimitPercent.HasValue
+                    ? (int?)Math.Round(data.ChargeLimitPercent.Value)
+                    : null
+            };
+            for (int i = 0; i < batteryLimitStatusTexts.Count; i++)
+                UpdateBatteryLimitControl(batteryLimitStatusTexts[i], batteryLimitOptionPanels[i], batteryLimitCustomRows[i], capabilities);
+        }
+
+        private void UpdateBatteryLimitControl(TextBlock status, StackPanel options, StackPanel customRow, BatteryLimitCapabilities capabilities)
+        {
+            if (status == null || options == null) return;
+            options.Children.Clear();
+            if (customRow != null)
+                customRow.Visibility = capabilities.Supported && capabilities.CanWrite ? Visibility.Visible : Visibility.Collapsed;
+            if (!capabilities.Supported || !capabilities.CanWrite)
+            {
+                status.Text = "未偵測到可控制的充電上限介面；請使用筆電原廠工具。";
+                return;
+            }
+
+            string current = capabilities.CurrentPercent.HasValue
+                ? "目前方案 " + capabilities.CurrentPercent.Value.ToString(CultureInfo.InvariantCulture) + "%"
+                : capabilities.LastAppliedPercent.HasValue
+                    ? "上次套用 " + capabilities.LastAppliedPercent.Value.ToString(CultureInfo.InvariantCulture) + "%"
+                    : "尚未讀回目前方案";
+            status.Text = current + " · " + capabilities.ProviderName + " · 可用方案由韌體確認";
+            foreach (int option in capabilities.Thresholds ?? new int[0])
+            {
+                int selected = option;
+                string label = option >= 100 ? "100%／關閉限制" : option.ToString(CultureInfo.InvariantCulture) + "%";
+                options.Children.Add(ActionButton(label, delegate { ApplyBatteryLimit(selected); }));
+            }
+        }
+
+        private void ApplyBatteryLimit(int percent)
+        {
+            BatteryLimitApplyResult result = BatteryLimitController.Apply(percent);
+            if (!result.Success)
+            {
+                MessageBox.Show(owner, result.Message, "Battery Pulse", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            settings.BatteryLimitPercent = percent;
+            settings.BatteryLimitHasApplied = true;
+            settings.Save();
+            RefreshFromLatest();
+        }
+
+        private void UpdateOverviewLimitCard(BatterySnapshot data)
+        {
+            if (overviewLimitValue == null || data == null) return;
+            if (!data.ChargeLimitSupported || !data.ChargeLimitCanWrite)
+            {
+                overviewLimitValue.Text = "未支援";
+                overviewLimitNote.Text = "未偵測到可控制介面";
+                return;
+            }
+
+            overviewLimitValue.Text = data.ChargeLimitPercent.HasValue
+                ? FormatPercent(data.ChargeLimitPercent)
+                : "可控制";
+            overviewLimitNote.Text = data.ChargeLimitIsLastApplied
+                ? "上次套用 · " + data.ChargeLimitProvider
+                : data.ChargeLimitPercent.HasValue
+                    ? "韌體回報 · " + data.ChargeLimitProvider
+                    : "可用 60／80／100% · " + data.ChargeLimitProvider;
+        }
+
+        private void UpdateBatteryLimitCareText(BatterySnapshot data)
+        {
+            if (batteryCareText == null || data == null) return;
+            if (!data.ChargeLimitSupported || !data.ChargeLimitCanWrite)
+            {
+                batteryCareText.Text = "未偵測到可控制的充電上限介面。請使用 ASUS／筆電原廠工具設定，BatteryPulse 不會自行猜測或改寫。";
+                return;
+            }
+
+            string state = data.ChargeLimitPercent.HasValue
+                ? (data.ChargeLimitIsLastApplied ? "上次套用 " : "韌體回報 ") + FormatPercent(data.ChargeLimitPercent)
+                : "已偵測到可控制介面，尚未讀回目前方案";
+            batteryCareText.Text = state + " · " + data.ChargeLimitProvider + "\n可用快捷方案：60%／80%／100%；自訂值需由韌體接受才會套用。";
         }
 
         private FrameworkElement BuildTrendPage()
@@ -482,7 +658,7 @@ namespace BatteryPulse
             gpuStepper = new NumericStepper(settings.GpuWarnC, 60, 100, 1, " °C");
             gpuStepper.ValueChanged += delegate(double value) { settings.GpuWarnC = value; settings.Save(); RefreshFromLatest(); };
             body.Children.Add(SettingRow("GPU 警示溫度", "僅使用 NVIDIA 獨顯核心溫度", gpuStepper.Root));
-            body.Children.Add(SettingRow("電池限制", "80% 上限由 ASUS 工具／韌體控制，未取得明確回報時不猜測", ValuePill("ASUS 控制")));
+            body.Children.Add(BuildBatteryLimitControlBand());
 
             body.Children.Add(SectionLabel("程式偏好"));
             alertsToggle = new ToggleSwitch(settings.AlertsEnabled);
@@ -1773,6 +1949,7 @@ namespace BatteryPulse
     {
         public Grid Root { get; private set; }
         public event Action<double> ValueChanged;
+        public double Value { get { return value; } }
         private readonly TextBlock valueText;
         private readonly double minimum;
         private readonly double maximum;
