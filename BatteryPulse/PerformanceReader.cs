@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace BatteryPulse
@@ -47,6 +48,7 @@ namespace BatteryPulse
         {
             if (data == null) return;
             ReadMemory(data);
+            ReadStorage(data);
             ReadCpuUsage(data);
             ReadChargeEta(data);
         }
@@ -62,6 +64,26 @@ namespace BatteryPulse
                 data.MemoryTotalMib = status.TotalPhys / 1024.0 / 1024.0;
                 data.MemoryUsedMib = (status.TotalPhys - status.AvailPhys) / 1024.0 / 1024.0;
                 data.MemorySource = "Windows GlobalMemoryStatusEx";
+            }
+            catch { }
+        }
+
+        private static void ReadStorage(BatterySnapshot data)
+        {
+            try
+            {
+                string root = Path.GetPathRoot(Environment.SystemDirectory);
+                if (string.IsNullOrWhiteSpace(root)) return;
+                var drive = new DriveInfo(root);
+                if (!drive.IsReady || drive.TotalSize <= 0) return;
+
+                double totalGiB = drive.TotalSize / 1024.0 / 1024.0 / 1024.0;
+                double freeGiB = drive.AvailableFreeSpace / 1024.0 / 1024.0 / 1024.0;
+                data.StorageTotalGiB = totalGiB;
+                data.StorageFreeGiB = Math.Max(0, freeGiB);
+                data.StorageUsedGiB = Math.Max(0, totalGiB - freeGiB);
+                data.StorageUsedPercent = Math.Max(0, Math.Min(100, data.StorageUsedGiB.Value / totalGiB * 100.0));
+                data.StorageSource = "Windows DriveInfo " + root.TrimEnd('\\');
             }
             catch { }
         }

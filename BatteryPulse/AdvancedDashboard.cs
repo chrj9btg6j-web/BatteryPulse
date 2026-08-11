@@ -60,8 +60,12 @@ namespace BatteryPulse
         private TextBlock overviewTemperatureNote;
         private TextBlock overviewMemoryValue;
         private TextBlock overviewMemoryNote;
+        private TextBlock overviewStorageValue;
+        private TextBlock overviewStorageNote;
         private TextBlock overviewBatteryValue;
         private TextBlock overviewBatteryNote;
+        private TextBlock overviewLimitValue;
+        private TextBlock overviewLimitNote;
         private TextBlock batteryCareText;
         private StackPanel overviewAlerts;
         private StackPanel alertsList;
@@ -343,7 +347,9 @@ namespace BatteryPulse
             metricsRow.Children.Add(OverviewSummaryTile("電腦耗電", "#FF8AC7A8", out overviewSystemValue, out overviewSystemNote));
             metricsRow.Children.Add(OverviewSummaryTile("溫度", "#FFFFC66D", out overviewTemperatureValue, out overviewTemperatureNote));
             metricsRow.Children.Add(OverviewSummaryTile("記憶體", "#FF9DB7D8", out overviewMemoryValue, out overviewMemoryNote));
+            metricsRow.Children.Add(OverviewSummaryTile("儲存空間", "#FF9DB7D8", out overviewStorageValue, out overviewStorageNote));
             metricsRow.Children.Add(OverviewSummaryTile("電池健康", "#FFC6A0FF", out overviewBatteryValue, out overviewBatteryNote));
+            metricsRow.Children.Add(OverviewSummaryTile("充電上限", "#FF8AC7A8", out overviewLimitValue, out overviewLimitNote));
             body.Children.Add(metricsRow);
 
             body.Children.Add(SectionLabel("需要注意"));
@@ -476,6 +482,7 @@ namespace BatteryPulse
             gpuStepper = new NumericStepper(settings.GpuWarnC, 60, 100, 1, " °C");
             gpuStepper.ValueChanged += delegate(double value) { settings.GpuWarnC = value; settings.Save(); RefreshFromLatest(); };
             body.Children.Add(SettingRow("GPU 警示溫度", "僅使用 NVIDIA 獨顯核心溫度", gpuStepper.Root));
+            body.Children.Add(SettingRow("電池限制", "80% 上限由 ASUS 工具／韌體控制，未取得明確回報時不猜測", ValuePill("ASUS 控制")));
 
             body.Children.Add(SectionLabel("程式偏好"));
             alertsToggle = new ToggleSwitch(settings.AlertsEnabled);
@@ -542,6 +549,22 @@ namespace BatteryPulse
                 overviewMemoryNote.Text = data.MemoryUsedMib.HasValue && data.MemoryTotalMib.HasValue
                     ? FormatMemory(data.MemoryUsedMib.Value, data.MemoryTotalMib.Value)
                     : "Windows 記憶體資料未取得";
+            }
+            if (overviewStorageValue != null)
+            {
+                overviewStorageValue.Text = FormatPercent(data.StorageUsedPercent);
+                overviewStorageNote.Text = data.StorageUsedGiB.HasValue && data.StorageTotalGiB.HasValue
+                    ? FormatStorage(data.StorageUsedGiB.Value, data.StorageFreeGiB, data.StorageTotalGiB.Value)
+                    : "系統碟資料未取得";
+            }
+            if (overviewLimitValue != null)
+            {
+                overviewLimitValue.Text = data.ChargeLimitPercent.HasValue
+                    ? FormatPercent(data.ChargeLimitPercent)
+                    : "未讀取";
+                overviewLimitNote.Text = data.ChargeLimitPercent.HasValue
+                    ? (string.IsNullOrWhiteSpace(data.ChargeLimitSource) ? "硬體回報" : data.ChargeLimitSource)
+                    : "由 ASUS 工具／韌體控制";
             }
         }
 
@@ -620,7 +643,10 @@ namespace BatteryPulse
                 string observed = data.IsAcLine && !data.IsCharging && data.Percent.HasValue
                     ? "目前觀察：接電但未充電，電量 " + data.Percent.Value.ToString("0", CultureInfo.InvariantCulture) + "%。這只能作為現象提示，不能確認 80% 上限。"
                     : "目前沒有足以確認充電上限的硬體回報。";
-                batteryCareText.Text = "目前模式：由 ASUS 韌體／MyASUS 或 Battery Health Charging 控制。\n" +
+                string limit = data.ChargeLimitPercent.HasValue
+                    ? "目前上限：" + FormatPercent(data.ChargeLimitPercent) + "（" + TextOrUnknown(data.ChargeLimitSource) + "）。"
+                    : "目前上限：未讀取。";
+                batteryCareText.Text = limit + "\n由 ASUS 韌體／MyASUS 或 Battery Health Charging 控制。\n" +
                     "Windows 標準電池資料沒有通用的充電上限寫入介面，BatteryPulse 不會用電量猜測或直接改寫設定。\n" + observed;
             }
         }
@@ -1432,6 +1458,12 @@ namespace BatteryPulse
             if (totalMib <= 0) return "Windows 記憶體資料";
             return (usedMib / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " / " +
                 (totalMib / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB";
+        }
+
+        private static string FormatStorage(double usedGiB, double? freeGiB, double totalGiB)
+        {
+            string used = usedGiB.ToString("0.0", CultureInfo.InvariantCulture) + " / " + totalGiB.ToString("0.0", CultureInfo.InvariantCulture) + " GiB";
+            return freeGiB.HasValue ? used + " · 可用 " + freeGiB.Value.ToString("0.0", CultureInfo.InvariantCulture) + " GiB" : used;
         }
 
         private static string FormatValue(double? value, string format, string suffix)

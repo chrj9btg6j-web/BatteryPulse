@@ -1185,6 +1185,11 @@ namespace BatteryPulse
         public double? MemoryUsedMib;
         public double? MemoryTotalMib;
         public string MemorySource;
+        public double? StorageUsedPercent;
+        public double? StorageUsedGiB;
+        public double? StorageFreeGiB;
+        public double? StorageTotalGiB;
+        public string StorageSource;
         public double? CpuUsagePercent;
         public string CpuUsageSource;
         public double? GpuUsagePercent;
@@ -1210,6 +1215,8 @@ namespace BatteryPulse
         public string SourceNote = "30 秒自動更新";
         public double? ChargeEtaSeconds;
         public string ChargeEtaSource;
+        public double? ChargeLimitPercent;
+        public string ChargeLimitSource;
         public DateTime ReadAt = DateTime.Now;
     }
 

@@ -555,6 +555,10 @@ namespace BatteryPulse
         public double? MemoryUsedPercent;
         public double? MemoryUsedMib;
         public double? MemoryTotalMib;
+        public double? StorageUsedPercent;
+        public double? StorageUsedGiB;
+        public double? StorageFreeGiB;
+        public double? StorageTotalGiB;
         public double? ChargeEtaSeconds;
         public bool IsAcLine;
         public string ChargerType;
@@ -580,6 +584,10 @@ namespace BatteryPulse
                 MemoryUsedPercent = data.MemoryUsedPercent,
                 MemoryUsedMib = data.MemoryUsedMib,
                 MemoryTotalMib = data.MemoryTotalMib,
+                StorageUsedPercent = data.StorageUsedPercent,
+                StorageUsedGiB = data.StorageUsedGiB,
+                StorageFreeGiB = data.StorageFreeGiB,
+                StorageTotalGiB = data.StorageTotalGiB,
                 ChargeEtaSeconds = data.ChargeEtaSeconds,
                 IsAcLine = data.IsAcLine,
                 ChargerType = data.ChargerType,
@@ -608,6 +616,10 @@ namespace BatteryPulse
                 Number(MemoryUsedPercent),
                 Number(MemoryUsedMib),
                 Number(MemoryTotalMib),
+                Number(StorageUsedPercent),
+                Number(StorageUsedGiB),
+                Number(StorageFreeGiB),
+                Number(StorageTotalGiB),
                 Number(CpuUsagePercent),
                 Number(GpuUsagePercent),
                 Number(ChargeEtaSeconds)
@@ -620,6 +632,7 @@ namespace BatteryPulse
             if (cells.Count < 12) return null;
             DateTime at;
             if (!DateTime.TryParse(cells[0], CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out at)) return null;
+            bool hasStorageColumns = cells.Count >= 24;
             return new TelemetryPoint
             {
                 At = at,
@@ -639,9 +652,13 @@ namespace BatteryPulse
                 MemoryUsedPercent = cells.Count > 14 ? ParseNumber(cells[14]) : null,
                 MemoryUsedMib = cells.Count > 15 ? ParseNumber(cells[15]) : null,
                 MemoryTotalMib = cells.Count > 16 ? ParseNumber(cells[16]) : null,
-                CpuUsagePercent = cells.Count > 17 ? ParseNumber(cells[17]) : null,
-                GpuUsagePercent = cells.Count > 18 ? ParseNumber(cells[18]) : null,
-                ChargeEtaSeconds = cells.Count > 19 ? ParseNumber(cells[19]) : null
+                StorageUsedPercent = hasStorageColumns && cells.Count > 17 ? ParseNumber(cells[17]) : null,
+                StorageUsedGiB = hasStorageColumns && cells.Count > 18 ? ParseNumber(cells[18]) : null,
+                StorageFreeGiB = hasStorageColumns && cells.Count > 19 ? ParseNumber(cells[19]) : null,
+                StorageTotalGiB = hasStorageColumns && cells.Count > 20 ? ParseNumber(cells[20]) : null,
+                CpuUsagePercent = cells.Count > (hasStorageColumns ? 21 : 17) ? ParseNumber(cells[hasStorageColumns ? 21 : 17]) : null,
+                GpuUsagePercent = cells.Count > (hasStorageColumns ? 22 : 18) ? ParseNumber(cells[hasStorageColumns ? 22 : 18]) : null,
+                ChargeEtaSeconds = cells.Count > (hasStorageColumns ? 23 : 19) ? ParseNumber(cells[hasStorageColumns ? 23 : 19]) : null
             };
         }
 
@@ -748,7 +765,7 @@ namespace BatteryPulse
     public sealed class TelemetryStore
     {
         public const int RetentionDays = 7;
-        private const string Header = "timestamp,battery_percent,battery_watts,battery_mode,system_watts,battery_temp_c,cpu_temp_c,cpu_source,gpu_temp_c,gpu_source,gpu_status,ac_line,charger_type,charger_type_source,memory_used_percent,memory_used_mib,memory_total_mib,cpu_usage_percent,gpu_usage_percent,charge_eta_seconds";
+        private const string Header = "timestamp,battery_percent,battery_watts,battery_mode,system_watts,battery_temp_c,cpu_temp_c,cpu_source,gpu_temp_c,gpu_source,gpu_status,ac_line,charger_type,charger_type_source,memory_used_percent,memory_used_mib,memory_total_mib,storage_used_percent,storage_used_gib,storage_free_gib,storage_total_gib,cpu_usage_percent,gpu_usage_percent,charge_eta_seconds";
         private readonly object fileSync = new object();
 
         public void Append(TelemetryPoint point)
