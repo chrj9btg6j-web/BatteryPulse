@@ -68,6 +68,7 @@ namespace BatteryPulse
         private TextBlock overviewBatteryNote;
         private TextBlock overviewLimitValue;
         private TextBlock overviewLimitNote;
+        private StackPanel overviewLimitOptions;
         private TextBlock batteryCareText;
         private readonly List<TextBlock> batteryLimitStatusTexts = new List<TextBlock>();
         private readonly List<StackPanel> batteryLimitOptionPanels = new List<StackPanel>();
@@ -412,7 +413,7 @@ namespace BatteryPulse
             metricsRow.Children.Add(OverviewSummaryTile("記憶體", "#FF9DB7D8", out overviewMemoryValue, out overviewMemoryNote));
             metricsRow.Children.Add(OverviewSummaryTile("儲存空間", "#FF9DB7D8", out overviewStorageValue, out overviewStorageNote));
             metricsRow.Children.Add(OverviewSummaryTile("電池健康", "#FFC6A0FF", out overviewBatteryValue, out overviewBatteryNote));
-            metricsRow.Children.Add(OverviewSummaryTile("充電上限", "#FF8AC7A8", out overviewLimitValue, out overviewLimitNote));
+            metricsRow.Children.Add(BuildOverviewLimitTile());
             body.Children.Add(metricsRow);
 
             body.Children.Add(SectionLabel("需要注意"));
@@ -574,6 +575,7 @@ namespace BatteryPulse
                     ? (int?)Math.Round(data.ChargeLimitPercent.Value)
                     : null
             };
+            UpdateBatteryLimitOptions(overviewLimitOptions, capabilities);
             for (int i = 0; i < batteryLimitStatusTexts.Count; i++)
                 UpdateBatteryLimitControl(batteryLimitStatusTexts[i], batteryLimitOptionPanels[i], batteryLimitCustomRows[i], capabilities);
         }
@@ -596,11 +598,23 @@ namespace BatteryPulse
                     ? "上次套用 " + capabilities.LastAppliedPercent.Value.ToString(CultureInfo.InvariantCulture) + "%"
                     : "尚未讀回目前方案";
             status.Text = current + " · " + capabilities.ProviderName + " · 可用方案由韌體確認";
+            UpdateBatteryLimitOptions(options, capabilities);
+        }
+
+        private void UpdateBatteryLimitOptions(StackPanel options, BatteryLimitCapabilities capabilities)
+        {
+            if (options == null) return;
+            options.Children.Clear();
+            if (!capabilities.Supported || !capabilities.CanWrite) return;
+            int index = 0;
             foreach (int option in capabilities.Thresholds ?? new int[0])
             {
                 int selected = option;
-                string label = option >= 100 ? "100%／關閉限制" : option.ToString(CultureInfo.InvariantCulture) + "%";
-                options.Children.Add(ActionButton(label, delegate { ApplyBatteryLimit(selected); }));
+                string label = option >= 100 ? "100%／關閉" : option.ToString(CultureInfo.InvariantCulture) + "%";
+                Border button = ActionButton(label, delegate { ApplyBatteryLimit(selected); });
+                button.Margin = new Thickness(index == 0 ? 0 : 6, 0, 0, 0);
+                options.Children.Add(button);
+                index++;
             }
         }
 
@@ -624,19 +638,23 @@ namespace BatteryPulse
             if (overviewLimitValue == null || data == null) return;
             if (!data.ChargeLimitSupported || !data.ChargeLimitCanWrite)
             {
-                overviewLimitValue.Text = "未支援";
-                overviewLimitNote.Text = "未偵測到可控制介面";
+                overviewLimitValue.Text = data.ChargeLimitPercent.HasValue
+                    ? FormatPercent(data.ChargeLimitPercent)
+                    : "未支援";
+                overviewLimitNote.Text = data.ChargeLimitPercent.HasValue
+                    ? "僅讀取 · " + TextOrUnknown(data.ChargeLimitProvider)
+                    : "未偵測到充電上限控制";
                 return;
             }
 
             overviewLimitValue.Text = data.ChargeLimitPercent.HasValue
-                ? FormatPercent(data.ChargeLimitPercent)
-                : "可控制";
+                ? (data.ChargeLimitIsLastApplied ? "上次 " : "目前 ") + FormatPercent(data.ChargeLimitPercent)
+                : "未讀回";
             overviewLimitNote.Text = data.ChargeLimitIsLastApplied
-                ? "上次套用 · " + data.ChargeLimitProvider
+                ? "上次套用 · " + TextOrUnknown(data.ChargeLimitProvider)
                 : data.ChargeLimitPercent.HasValue
-                    ? "韌體回報 · " + data.ChargeLimitProvider
-                    : "可用 60／80／100% · " + data.ChargeLimitProvider;
+                    ? "目前讀值 · " + TextOrUnknown(data.ChargeLimitProvider)
+                    : "讀值未回報 · 請選下方方案";
         }
 
         private void UpdateBatteryLimitCareText(BatterySnapshot data)
@@ -1190,6 +1208,73 @@ namespace BatteryPulse
             grid.Children.Add(note);
             root.Child = grid;
             RegisterMetric(key, new MetricView(value, note));
+            root.MouseEnter += delegate { root.Background = B("#22FFFFFF"); };
+            root.MouseLeave += delegate { root.Background = B("#17FFFFFF"); };
+            return root;
+        }
+
+        private Border BuildOverviewLimitTile()
+        {
+            var panel = new StackPanel();
+            var heading = new StackPanel { Orientation = Orientation.Horizontal };
+            heading.Children.Add(new Border
+            {
+                Width = 5,
+                Height = 5,
+                CornerRadius = new CornerRadius(3),
+                Background = B("#FF8AC7A8"),
+                Margin = new Thickness(0, 5, 8, 0),
+                VerticalAlignment = VerticalAlignment.Top
+            });
+            heading.Children.Add(new TextBlock
+            {
+                Text = "充電上限",
+                Foreground = B("#FF6D757D"),
+                FontSize = 10.5,
+                FontWeight = FontWeights.SemiBold
+            });
+            panel.Children.Add(heading);
+
+            overviewLimitValue = new TextBlock
+            {
+                Text = "未讀取",
+                Foreground = B("#FF252A2F"),
+                FontSize = 20,
+                FontWeight = FontWeights.Light,
+                Margin = new Thickness(0, 10, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            panel.Children.Add(overviewLimitValue);
+
+            overviewLimitNote = new TextBlock
+            {
+                Text = "等待硬體回報",
+                Foreground = B("#FF6D757D"),
+                FontSize = 9.5,
+                Margin = new Thickness(0, 6, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            panel.Children.Add(overviewLimitNote);
+
+            overviewLimitOptions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 10, 0, 0)
+            };
+            panel.Children.Add(overviewLimitOptions);
+
+            var root = new Border
+            {
+                Width = 310,
+                Margin = new Thickness(0, 0, 10, 0),
+                Padding = new Thickness(16, 14, 16, 13),
+                MinHeight = 142,
+                CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1),
+                BorderBrush = B("#2BFFFFFF"),
+                Background = B("#17FFFFFF"),
+                Child = panel
+            };
             root.MouseEnter += delegate { root.Background = B("#22FFFFFF"); };
             root.MouseLeave += delegate { root.Background = B("#17FFFFFF"); };
             return root;
