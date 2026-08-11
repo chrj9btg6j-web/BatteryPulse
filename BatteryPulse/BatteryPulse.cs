@@ -1181,6 +1181,14 @@ namespace BatteryPulse
         public string BatteryPowerMode;
         public double? SystemWatts;
         public double EstimatedComponentWatts;
+        public double? MemoryUsedPercent;
+        public double? MemoryUsedMib;
+        public double? MemoryTotalMib;
+        public string MemorySource;
+        public double? CpuUsagePercent;
+        public string CpuUsageSource;
+        public double? GpuUsagePercent;
+        public string GpuUsageSource;
         public double? VoltageMv;
         public double? BatteryTempC;
         public double? DesignCapacityMwh;
@@ -1200,12 +1208,15 @@ namespace BatteryPulse
         public string ChargerTypeSource = "尚未取得來源";
         public string StatusText = "未知";
         public string SourceNote = "30 秒自動更新";
+        public double? ChargeEtaSeconds;
+        public string ChargeEtaSource;
         public DateTime ReadAt = DateTime.Now;
     }
 
     public sealed class BatteryReader
     {
         private readonly LhmReader lhmReader = new LhmReader();
+        private readonly PerformanceReader performanceReader = new PerformanceReader();
 
         public BatterySnapshot Read()
         {
@@ -1228,6 +1239,7 @@ namespace BatteryPulse
             ReadThermalCounter(data);
             ReadThermalZone(data);
             FinalizePower(data);
+            performanceReader.Read(data);
             ChargerTypeDetector.Enrich(data);
             if (data.GpuTempC.HasValue) data.GpuStatus = "運作中";
             data.SourceNote = SourceNote(data);
@@ -1643,6 +1655,12 @@ namespace BatteryPulse
 
     public sealed class AppSettings
     {
+        public static readonly string[] TopBarItemIds =
+        {
+            "charger", "charge", "percent", "power", "cpuTemp", "gpuTemp",
+            "eta", "ram", "cpuUsage", "gpuUsage"
+        };
+
         public string CustomTitle = "BATTERY PULSE";
         public bool TextShadow = true;
         public bool HasWindowPosition;
@@ -1653,6 +1671,8 @@ namespace BatteryPulse
         public double CpuWarnC = 85;
         public double GpuWarnC = 85;
         public bool AlertsEnabled = true;
+        public string TopBarItems = "charger,charge,percent,power,cpuTemp,gpuTemp,eta,ram,cpuUsage,gpuUsage";
+        public string TopBarHiddenItems = "eta,ram,cpuUsage,gpuUsage";
         public double DayWh;
         public double MonthWh;
         public string DayKey = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -1680,6 +1700,8 @@ namespace BatteryPulse
 
         private static string PathName { get { return System.IO.Path.Combine(AppDirectory, "settings.ini"); } }
 
+        internal static string SettingsFilePath { get { return PathName; } }
+
         public static AppSettings Load()
         {
             var settings = new AppSettings();
@@ -1704,6 +1726,8 @@ namespace BatteryPulse
                     if (key == "cpuWarnC") settings.CpuWarnC = Math.Max(60, ParseDouble(value));
                     if (key == "gpuWarnC") settings.GpuWarnC = Math.Max(60, ParseDouble(value));
                     if (key == "alertsEnabled") settings.AlertsEnabled = value == "1";
+                    if (key == "topBarItems" && !string.IsNullOrWhiteSpace(value)) settings.TopBarItems = value;
+                    if (key == "topBarHiddenItems") settings.TopBarHiddenItems = value;
                     if (key == "dayWh") settings.DayWh = ParseDouble(value);
                     if (key == "monthWh") settings.MonthWh = ParseDouble(value);
                     if (key == "dayKey" && !string.IsNullOrWhiteSpace(value)) settings.DayKey = value;
@@ -1733,6 +1757,8 @@ namespace BatteryPulse
                     "cpuWarnC=" + CpuWarnC.ToString("R", CultureInfo.InvariantCulture),
                     "gpuWarnC=" + GpuWarnC.ToString("R", CultureInfo.InvariantCulture),
                     "alertsEnabled=" + (AlertsEnabled ? "1" : "0"),
+                    "topBarItems=" + TopBarItems,
+                    "topBarHiddenItems=" + TopBarHiddenItems,
                     "dayWh=" + DayWh.ToString("R", CultureInfo.InvariantCulture),
                     "monthWh=" + MonthWh.ToString("R", CultureInfo.InvariantCulture),
                     "dayKey=" + DayKey,
@@ -1741,6 +1767,55 @@ namespace BatteryPulse
                 });
             }
             catch { }
+        }
+
+        public List<string> GetTopBarItems()
+        {
+            var result = new List<string>();
+            string[] stored = (TopBarItems ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string item in stored)
+            {
+                string id = item.Trim();
+                if (Array.IndexOf(TopBarItemIds, id) >= 0 && !result.Contains(id)) result.Add(id);
+            }
+            foreach (string id in TopBarItemIds)
+            {
+                if (!result.Contains(id)) result.Add(id);
+            }
+            return result;
+        }
+
+        public bool IsTopBarItemEnabled(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return false;
+            string[] hidden = (TopBarHiddenItems ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            return !hidden.Any(delegate(string value) { return string.Equals(value.Trim(), id, StringComparison.OrdinalIgnoreCase); });
+        }
+
+        public void SetTopBarItemEnabled(string id, bool enabled)
+        {
+            var hidden = new List<string>((TopBarHiddenItems ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
+            hidden.RemoveAll(delegate(string value) { return string.Equals(value.Trim(), id, StringComparison.OrdinalIgnoreCase); });
+            if (!enabled) hidden.Add(id);
+            TopBarHiddenItems = string.Join(",", hidden.Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+
+        public static string TopBarItemLabel(string id)
+        {
+            switch (id)
+            {
+                case "charger": return "充電器類型";
+                case "charge": return "充電瓦數";
+                case "percent": return "電池電量";
+                case "power": return "電腦耗電";
+                case "cpuTemp": return "CPU 溫度";
+                case "gpuTemp": return "GPU 溫度";
+                case "eta": return "預估完成時間";
+                case "ram": return "RAM 使用率";
+                case "cpuUsage": return "CPU 使用率";
+                case "gpuUsage": return "GPU 使用率";
+                default: return id;
+            }
         }
 
         private static double ParseDouble(string value)
@@ -1882,6 +1957,21 @@ namespace BatteryPulse
             {
                 if (value.Value < 0) return;
                 ReadPowerSensor(haystack, sensorName, value.Value, data);
+                return;
+            }
+
+            if (string.Equals(sensorType, "Load", StringComparison.OrdinalIgnoreCase))
+            {
+                if (value.Value < 0 || value.Value > 100) return;
+                bool gpuHardware = HardwareTemperatureClassifier.IsGpuHardware(hardwareType, hardwareName);
+                bool gpuLoad = gpuHardware && (haystack.IndexOf("3d", StringComparison.Ordinal) >= 0 ||
+                    haystack.IndexOf("core", StringComparison.Ordinal) >= 0 ||
+                    haystack.IndexOf("gpu", StringComparison.Ordinal) >= 0);
+                if (gpuLoad && (!data.GpuUsagePercent.HasValue || value.Value > data.GpuUsagePercent.Value))
+                {
+                    data.GpuUsagePercent = value.Value;
+                    data.GpuUsageSource = "LibreHardwareMonitor " + sensorName;
+                }
                 return;
             }
 

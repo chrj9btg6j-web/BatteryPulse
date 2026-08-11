@@ -1,3 +1,7 @@
+param(
+    [string]$OutputName = 'BatteryPulse.TopBar.exe'
+)
+
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -15,17 +19,17 @@ if (-not (Test-Path -LiteralPath $csc)) {
 Push-Location $root
 try {
     & $csc /nologo /target:winexe /optimize+ /debug:pdbonly /langversion:Default `
-        /out:BatteryPulse.TopBar.exe /main:BatteryPulse.TopBarProgram /win32manifest:BatteryPulse.app.manifest /win32icon:BatteryPulse.ProgramLogo.ico `
+        "/out:$OutputName" /main:BatteryPulse.TopBarProgram /win32manifest:BatteryPulse.app.manifest /win32icon:BatteryPulse.ProgramLogo.ico `
         /resource:BatteryPulse.ChargeLightning.png,BatteryPulse.ChargeLightning.png `
         /resource:BatteryPulse.PowerLightning.png,BatteryPulse.PowerLightning.png `
         /reference:System.dll /reference:System.Core.dll /reference:System.Management.dll `
         /reference:System.Windows.Forms.dll /reference:Microsoft.VisualBasic.dll `
         "/reference:$winbase" "/reference:$pcore" "/reference:$pframe" "/reference:$systemXaml" `
-        BatteryPulse.cs BatteryWindow.Advanced.cs AdvancedDashboard.cs TopStatusBarWindow.cs
+        BatteryPulse.cs BatteryWindow.Advanced.cs AdvancedDashboard.cs PerformanceReader.cs TopStatusBarWindow.cs
     if ($LASTEXITCODE -ne 0) {
         throw "BatteryPulse.TopBar 編譯失敗，錯誤碼：$LASTEXITCODE"
     }
-    Write-Output (Join-Path $root 'BatteryPulse.TopBar.exe')
+    Write-Output (Join-Path $root $OutputName)
 }
 finally {
     Pop-Location

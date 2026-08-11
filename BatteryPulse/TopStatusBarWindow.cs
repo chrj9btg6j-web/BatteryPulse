@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -19,6 +20,7 @@ namespace BatteryPulse
     {
         private readonly Border shell;
         private readonly StackPanel statusRow;
+        private readonly TextBlock titleText;
         private readonly TextBlock chargerText;
         private readonly Border chargerSpacer;
         private readonly Border titleSpacer;
@@ -36,7 +38,14 @@ namespace BatteryPulse
         private readonly TextBlock cpuText;
         private readonly Border cpuSpacer;
         private readonly TextBlock gpuText;
+        private readonly TextBlock etaText;
+        private readonly TextBlock ramText;
+        private readonly TextBlock cpuUsageText;
+        private readonly TextBlock gpuUsageText;
         private readonly DropShadowEffect shadow;
+        private readonly List<Border> layoutSpacers = new List<Border>();
+        private AppSettings topBarSettings;
+        private DateTime settingsWriteTime = DateTime.MinValue;
         private bool chargeBlinking;
         private bool powerBlinking;
         private Action openAdvanced;
@@ -61,6 +70,8 @@ namespace BatteryPulse
             Background = Brushes.Transparent;
             FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI");
             SnapsToDevicePixels = true;
+            topBarSettings = AppSettings.Load();
+            settingsWriteTime = ReadSettingsWriteTime();
 
             shadow = new DropShadowEffect
             {
@@ -79,7 +90,8 @@ namespace BatteryPulse
                 Margin = new Thickness(12, 0, 12, 0)
             };
 
-            statusRow.Children.Add(TextCell("BATTERY PULSE", 12.5, FontWeights.Medium, "#FFFFFFFF"));
+            titleText = TextCell(topBarSettings.CustomTitle, 12.5, FontWeights.Medium, "#FFFFFFFF");
+            statusRow.Children.Add(titleText);
             titleSpacer = Spacer(14);
             statusRow.Children.Add(titleSpacer);
 
@@ -117,6 +129,15 @@ namespace BatteryPulse
             gpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
             statusRow.Children.Add(gpuText);
 
+            etaText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            statusRow.Children.Add(etaText);
+            ramText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            statusRow.Children.Add(ramText);
+            cpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            statusRow.Children.Add(cpuUsageText);
+            gpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            statusRow.Children.Add(gpuUsageText);
+
             shell = new Border
             {
                 Margin = new Thickness(0),
@@ -146,6 +167,12 @@ namespace BatteryPulse
             cpuText.Visibility = Visibility.Collapsed;
             cpuSpacer.Visibility = Visibility.Collapsed;
             gpuText.Visibility = Visibility.Collapsed;
+            etaText.Visibility = Visibility.Collapsed;
+            ramText.Visibility = Visibility.Collapsed;
+            cpuUsageText.Visibility = Visibility.Collapsed;
+            gpuUsageText.Visibility = Visibility.Collapsed;
+
+            RebuildStatusLayout();
 
             shell.MouseEnter += delegate { AnimateShadow(true); };
             shell.MouseLeave += delegate { AnimateShadow(false); };
@@ -161,6 +188,97 @@ namespace BatteryPulse
                 Opacity = 0;
                 BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
             };
+        }
+
+        private void RebuildStatusLayout()
+        {
+            if (statusRow == null || titleText == null || topBarSettings == null) return;
+            statusRow.Children.Clear();
+            layoutSpacers.Clear();
+            statusRow.Children.Add(titleText);
+            foreach (string id in topBarSettings.GetTopBarItems())
+            {
+                FrameworkElement element = GetItemElement(id);
+                if (element == null) continue;
+                Border spacer = Spacer(14);
+                layoutSpacers.Add(spacer);
+                statusRow.Children.Add(spacer);
+                statusRow.Children.Add(element);
+            }
+            ApplyLayoutVisibility();
+        }
+
+        private FrameworkElement GetItemElement(string id)
+        {
+            switch (id)
+            {
+                case "charger": return chargerText;
+                case "charge": return chargeGroup;
+                case "percent": return percentText;
+                case "power": return powerGroup;
+                case "cpuTemp": return cpuText;
+                case "gpuTemp": return gpuText;
+                case "eta": return etaText;
+                case "ram": return ramText;
+                case "cpuUsage": return cpuUsageText;
+                case "gpuUsage": return gpuUsageText;
+                default: return null;
+            }
+        }
+
+        private void ApplyLayoutVisibility()
+        {
+            for (int i = 0; i < layoutSpacers.Count; i++)
+            {
+                int childIndex = 2 + i * 2;
+                if (childIndex >= statusRow.Children.Count) break;
+                FrameworkElement item = statusRow.Children[childIndex] as FrameworkElement;
+                layoutSpacers[i].Visibility = item != null && item.Visibility == Visibility.Visible
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+        }
+
+        private void ReloadSettingsIfChanged()
+        {
+            DateTime current = ReadSettingsWriteTime();
+            if (current == settingsWriteTime) return;
+            settingsWriteTime = current;
+            topBarSettings = AppSettings.Load();
+            titleText.Text = topBarSettings.CustomTitle;
+            RebuildStatusLayout();
+        }
+
+        private static DateTime ReadSettingsWriteTime()
+        {
+            try
+            {
+                return File.Exists(AppSettings.SettingsFilePath)
+                    ? File.GetLastWriteTimeUtc(AppSettings.SettingsFilePath)
+                    : DateTime.MinValue;
+            }
+            catch { return DateTime.MinValue; }
+        }
+
+        private bool IsItemEnabled(string id)
+        {
+            return topBarSettings != null && topBarSettings.IsTopBarItemEnabled(id);
+        }
+
+        private static string FormatEta(double seconds)
+        {
+            if (seconds < 60) return "ETA <1m";
+            TimeSpan value = TimeSpan.FromSeconds(seconds);
+            if (value.TotalHours >= 1)
+                return "ETA " + ((int)Math.Floor(value.TotalHours)).ToString(CultureInfo.InvariantCulture) + "h" + value.Minutes.ToString("00", CultureInfo.InvariantCulture);
+            return "ETA " + Math.Max(1, (int)Math.Round(value.TotalMinutes)).ToString(CultureInfo.InvariantCulture) + "m";
+        }
+
+        private static string FormatPercent(double? value)
+        {
+            return value.HasValue && value.Value >= 0 && value.Value <= 100
+                ? Math.Round(value.Value).ToString("0", CultureInfo.InvariantCulture) + "%"
+                : string.Empty;
         }
 
         public void SetOpenAdvancedAction(Action action)
@@ -194,11 +312,17 @@ namespace BatteryPulse
                 return;
             }
 
+            ReloadSettingsIfChanged();
+
             bool hasChargePower = HasPositive(data.Watts);
             bool hasSystemPower = HasPositive(data.SystemWatts);
             bool hasPercent = data.Percent.HasValue && data.Percent.Value >= 0;
             bool hasCpu = HasTemperature(data.CpuTempC);
             bool hasGpu = HasTemperature(data.GpuTempC);
+            bool hasEta = data.ChargeEtaSeconds.HasValue && data.ChargeEtaSeconds.Value > 0;
+            bool hasRam = data.MemoryUsedPercent.HasValue && data.MemoryUsedPercent.Value >= 0;
+            bool hasCpuUsage = data.CpuUsagePercent.HasValue && data.CpuUsagePercent.Value >= 0;
+            bool hasGpuUsage = data.GpuUsagePercent.HasValue && data.GpuUsagePercent.Value >= 0;
             bool charging = data.IsAcLine && (data.IsCharging ||
                 (hasChargePower && string.Equals(data.BatteryPowerMode, "充電", StringComparison.OrdinalIgnoreCase)));
             // 放電時的 data.Watts 是電池流出功率，不應再以「充電瓦數」顯示。
@@ -212,25 +336,29 @@ namespace BatteryPulse
             bool knownCharger = data.IsAcLine && !string.IsNullOrWhiteSpace(DisplayChargerType(data.ChargerType));
 
             chargerText.Text = knownCharger ? ChargerLabel(data, charging) : string.Empty;
-            chargerText.Visibility = knownCharger ? Visibility.Visible : Visibility.Collapsed;
-            chargerSpacer.Visibility = knownCharger ? Visibility.Visible : Visibility.Collapsed;
-            chargeGroup.Visibility = showChargeGroup ? Visibility.Visible : Visibility.Collapsed;
-            chargeSpacer.Visibility = showChargeGroup ? Visibility.Visible : Visibility.Collapsed;
-            chargePlus.Visibility = charging ? Visibility.Visible : Visibility.Collapsed;
+            chargerText.Visibility = knownCharger && IsItemEnabled("charger") ? Visibility.Visible : Visibility.Collapsed;
+            chargeGroup.Visibility = showChargeGroup && IsItemEnabled("charge") ? Visibility.Visible : Visibility.Collapsed;
+            chargePlus.Visibility = chargeGroup.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
             chargeValue.Text = FormatWatts(data.Watts);
             percentText.Text = percent;
-            percentText.Visibility = hasPercent ? Visibility.Visible : Visibility.Collapsed;
-            percentSpacer.Visibility = hasPercent ? Visibility.Visible : Visibility.Collapsed;
-            powerGroup.Visibility = hasSystemPower ? Visibility.Visible : Visibility.Collapsed;
-            powerSpacer.Visibility = hasSystemPower ? Visibility.Visible : Visibility.Collapsed;
+            percentText.Visibility = hasPercent && IsItemEnabled("percent") ? Visibility.Visible : Visibility.Collapsed;
+            powerGroup.Visibility = hasSystemPower && IsItemEnabled("power") ? Visibility.Visible : Visibility.Collapsed;
             powerValue.Text = FormatWatts(data.SystemWatts);
             cpuText.Text = hasCpu ? "CPU " + FormatTemperature(data.CpuTempC) : string.Empty;
-            cpuText.Visibility = hasCpu ? Visibility.Visible : Visibility.Collapsed;
-            cpuSpacer.Visibility = hasCpu ? Visibility.Visible : Visibility.Collapsed;
+            cpuText.Visibility = hasCpu && IsItemEnabled("cpuTemp") ? Visibility.Visible : Visibility.Collapsed;
             gpuText.Text = hasGpu ? "GPU " + FormatTemperature(data.GpuTempC) : string.Empty;
-            gpuText.Visibility = hasGpu ? Visibility.Visible : Visibility.Collapsed;
+            gpuText.Visibility = hasGpu && IsItemEnabled("gpuTemp") ? Visibility.Visible : Visibility.Collapsed;
+            etaText.Text = hasEta ? FormatEta(data.ChargeEtaSeconds.Value) : string.Empty;
+            etaText.Visibility = hasEta && charging && IsItemEnabled("eta") ? Visibility.Visible : Visibility.Collapsed;
+            ramText.Text = hasRam ? "RAM " + FormatPercent(data.MemoryUsedPercent) : string.Empty;
+            ramText.Visibility = hasRam && IsItemEnabled("ram") ? Visibility.Visible : Visibility.Collapsed;
+            cpuUsageText.Text = hasCpuUsage ? "CPU " + FormatPercent(data.CpuUsagePercent) : string.Empty;
+            cpuUsageText.Visibility = hasCpuUsage && IsItemEnabled("cpuUsage") ? Visibility.Visible : Visibility.Collapsed;
+            gpuUsageText.Text = hasGpuUsage ? "GPU " + FormatPercent(data.GpuUsagePercent) : string.Empty;
+            gpuUsageText.Visibility = hasGpuUsage && IsItemEnabled("gpuUsage") ? Visibility.Visible : Visibility.Collapsed;
             SetBlinking(chargeIcon, charging, ref chargeBlinking, 860);
             SetBlinking(powerIcon, hasSystemPower, ref powerBlinking, 980);
+            ApplyLayoutVisibility();
             shell.ToolTip = BuildSourceToolTip(data, type);
         }
 
@@ -387,7 +515,8 @@ namespace BatteryPulse
         private void OpenAdvanced()
         {
             if (openAdvanced == null) return;
-            Hide();
+            // 保留頂端列在進階儀表板上方，讓展開後仍可即時看到關鍵狀態。
+            // 進階頁返回小工具時，host 仍會呼叫 ShowTopBar；此處不需先隱藏。
             openAdvanced();
         }
 

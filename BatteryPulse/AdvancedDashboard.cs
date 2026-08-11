@@ -45,7 +45,6 @@ namespace BatteryPulse
         private TextBlock liveTime;
         private TextBlock sidebarBattery;
         private TextBlock sidebarState;
-        private TextBlock pdOverviewText;
         private TextBlock pdDetailText;
         private TextBlock powerSourceText;
         private TextBlock temperatureSourceText;
@@ -53,15 +52,21 @@ namespace BatteryPulse
         private TextBlock batteryIdentityText;
         private TextBlock overviewStateValue;
         private TextBlock overviewStateNote;
-        private TextBlock overviewPowerValue;
+        private TextBlock overviewChargeValue;
+        private TextBlock overviewChargeNote;
+        private TextBlock overviewSystemValue;
+        private TextBlock overviewSystemNote;
         private TextBlock overviewTemperatureValue;
         private TextBlock overviewTemperatureNote;
+        private TextBlock overviewMemoryValue;
+        private TextBlock overviewMemoryNote;
         private TextBlock overviewBatteryValue;
         private TextBlock overviewBatteryNote;
+        private TextBlock batteryCareText;
         private StackPanel overviewAlerts;
         private StackPanel alertsList;
         private StackPanel dailyList;
-        private TelemetryChart overviewChart;
+        private StackPanel topBarItemsPanel;
         private TelemetryChart powerChart;
         private TelemetryChart temperatureChart;
         private TelemetryChart trendChart;
@@ -118,11 +123,7 @@ namespace BatteryPulse
                     ? (data.IsCharging ? "充電中" : (data.IsAcLine ? "外接電源" : "電池供電"))
                     : data.StatusText;
             }
-            if (overviewTemperatureValue != null)
-            {
-                overviewTemperatureValue.Text = FormatTemperaturePair(data.CpuTempC, data.GpuTempC);
-                overviewTemperatureNote.Text = TemperatureOverviewState(data);
-            }
+            UpdateOverviewCards(data);
 
             SetMetric("battery", FormatPercent(data.Percent), data.StatusText);
             SetMetric("system", FormatValue(data.SystemWatts, "0.0", " W"), data.SystemWatts.HasValue ? "感測器估算" : "沒有可用讀值");
@@ -135,10 +136,9 @@ namespace BatteryPulse
             UpdateTemperatureSources(data);
             UpdateAlerts(data, latestPoints);
 
-            overviewChart.SetPoints(latestPoints);
-            powerChart.SetPoints(latestPoints);
-            temperatureChart.SetPoints(latestPoints);
-            trendChart.SetPoints(latestPoints);
+            if (powerChart != null) powerChart.SetPoints(latestPoints);
+            if (temperatureChart != null) temperatureChart.SetPoints(latestPoints);
+            if (trendChart != null) trendChart.SetPoints(latestPoints);
 
             if (currentPage == 5 && (DateTime.Now - lastDaysLoaded).TotalSeconds > 30) LoadDailyRows();
         }
@@ -146,10 +146,9 @@ namespace BatteryPulse
         public void UpdateHistory(IList<TelemetryPoint> points)
         {
             latestPoints = points ?? new List<TelemetryPoint>();
-            overviewChart.SetPoints(latestPoints);
-            powerChart.SetPoints(latestPoints);
-            temperatureChart.SetPoints(latestPoints);
-            trendChart.SetPoints(latestPoints);
+            if (powerChart != null) powerChart.SetPoints(latestPoints);
+            if (temperatureChart != null) temperatureChart.SetPoints(latestPoints);
+            if (trendChart != null) trendChart.SetPoints(latestPoints);
         }
 
         private Grid BuildRoot()
@@ -332,19 +331,21 @@ namespace BatteryPulse
         {
             StackPanel body = PageBody();
             body.Children.Add(SectionLabel("核心狀態"));
-            var metricsRow = MetricGrid(4);
+            var metricsRow = new WrapPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 10)
+            };
             metricsRow.Children.Add(OverviewSummaryTile("目前狀態", "#FF67D9B7", out overviewStateValue, out overviewStateNote));
-            metricsRow.Children.Add(OverviewSummaryTile("電源", "#FF6FC4F2", out overviewPowerValue, out pdOverviewText));
+            metricsRow.Children.Add(OverviewSummaryTile("充電瓦數", "#FF6FC4F2", out overviewChargeValue, out overviewChargeNote));
+            metricsRow.Children.Add(OverviewSummaryTile("電腦耗電", "#FF8AC7A8", out overviewSystemValue, out overviewSystemNote));
             metricsRow.Children.Add(OverviewSummaryTile("溫度", "#FFFFC66D", out overviewTemperatureValue, out overviewTemperatureNote));
+            metricsRow.Children.Add(OverviewSummaryTile("記憶體", "#FF9DB7D8", out overviewMemoryValue, out overviewMemoryNote));
             metricsRow.Children.Add(OverviewSummaryTile("電池健康", "#FFC6A0FF", out overviewBatteryValue, out overviewBatteryNote));
             body.Children.Add(metricsRow);
 
             body.Children.Add(SectionLabel("需要注意"));
             body.Children.Add(AlertBand("目前需要注意", out overviewAlerts));
-
-            body.Children.Add(SectionLabel("最近 30 分鐘"));
-            overviewChart = new TelemetryChart(TelemetryChartMode.All) { Height = 178 };
-            body.Children.Add(ChartBand(overviewChart, true));
             return PageScroll(body);
         }
 
@@ -408,6 +409,7 @@ namespace BatteryPulse
             Grid.SetColumn(identity, 1);
             split.Children.Add(identity);
             body.Children.Add(split);
+            body.Children.Add(InformationBand("充電上限／電池保護", "#FF8AC7A8", out batteryCareText));
             return PageScroll(body);
         }
 
@@ -487,6 +489,19 @@ namespace BatteryPulse
             startupToggle.Changed += delegate(bool value) { owner.DashboardSetStartup(value); };
             body.Children.Add(SettingRow("開機啟動", "登入 Windows 後自動啟動小工具", startupToggle.Root));
 
+            body.Children.Add(SectionLabel("頂端狀態列"));
+            body.Children.Add(new TextBlock
+            {
+                Text = "只顯示有讀值的項目；可用上下按鈕調整順序。展開進階頁時頂端列仍會保留。",
+                Foreground = B("#FF6D757D"),
+                FontSize = 9.5,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, -3, 0, 9)
+            });
+            topBarItemsPanel = new StackPanel();
+            body.Children.Add(topBarItemsPanel);
+            RefreshTopBarItemsPanel();
+
             body.Children.Add(SectionLabel("資料"));
             body.Children.Add(SettingRow("歷史資料", "每天一份 CSV，超過七天自動清理", ValuePill("7 天")));
             body.Children.Add(SettingRow("耗能累計", "重置今日與本月的累積瓦時", ActionButton("重置", delegate
@@ -495,6 +510,37 @@ namespace BatteryPulse
                     owner.DashboardResetEnergy();
             })));
             return PageScroll(body);
+        }
+
+        private void UpdateOverviewCards(BatterySnapshot data)
+        {
+            if (overviewChargeValue != null)
+            {
+                bool hasCharge = data.IsCharging && data.Watts.HasValue && data.Watts.Value > 0;
+                overviewChargeValue.Text = hasCharge ? FormatValue(data.Watts, "0.0", " W") : "--";
+                overviewChargeNote.Text = hasCharge
+                    ? (data.ChargeEtaSeconds.HasValue ? "預估 " + FormatDuration(TimeSpan.FromSeconds(data.ChargeEtaSeconds.Value)) + " 充滿" : "電池吸收功率")
+                    : "目前沒有充電讀值";
+            }
+            if (overviewSystemValue != null)
+            {
+                overviewSystemValue.Text = FormatValue(data.SystemWatts, "0.0", " W");
+                overviewSystemNote.Text = data.SystemWatts.HasValue ? "感測器／電池流向" : "目前沒有耗電讀值";
+            }
+            if (overviewTemperatureValue != null)
+            {
+                bool hasCpu = data.CpuTempC.HasValue;
+                bool hasGpu = data.GpuTempC.HasValue;
+                overviewTemperatureValue.Text = FormatTemperaturePair(data.CpuTempC, data.GpuTempC);
+                overviewTemperatureNote.Text = (hasCpu || hasGpu) ? TemperatureOverviewState(data) : "目前沒有溫度讀值";
+            }
+            if (overviewMemoryValue != null)
+            {
+                overviewMemoryValue.Text = FormatPercent(data.MemoryUsedPercent);
+                overviewMemoryNote.Text = data.MemoryUsedMib.HasValue && data.MemoryTotalMib.HasValue
+                    ? FormatMemory(data.MemoryUsedMib.Value, data.MemoryTotalMib.Value)
+                    : "Windows 記憶體資料未取得";
+            }
         }
 
         private void UpdatePower(BatterySnapshot data)
@@ -546,8 +592,6 @@ namespace BatteryPulse
             SetMetric("pd_margin", input.HasValue ? FormatSigned(settings.PdWatts - input.Value, " W") : "--", settings.PdWatts.ToString("0", CultureInfo.InvariantCulture) + " W 基準");
             SetMetric("battery_flow", data.Watts.HasValue ? (string.IsNullOrEmpty(data.BatteryPowerMode) ? "電池" : data.BatteryPowerMode) + " " + data.Watts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W" : "--", data.IsAcLine ? "外接電源中" : "電池供電中");
 
-            if (overviewPowerValue != null) overviewPowerValue.Text = FormatValue(data.SystemWatts, "0.0", " W");
-            if (pdOverviewText != null) pdOverviewText.Text = status;
             pdDetailText.Text = status + "\n" + note + (input.HasValue ? "。推估輸入 " + input.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W／設定 " + settings.PdWatts.ToString("0", CultureInfo.InvariantCulture) + " W。" : "。") + (supplement ? "\n目前偵測到外接電源時電池仍在放電，這是供電不足最直接的訊號。" : "\n若沒有出現電池補足，日常工作通常仍在供電範圍內。 ");
             powerSourceText.Text = "電池流向：Windows BatteryStatus／LibreHardwareMonitor\n電腦耗電：電池放電值或可用元件功率合計\nPD 輸入：電腦耗電 + 充電功率，屬於推估值";
         }
@@ -569,6 +613,14 @@ namespace BatteryPulse
 
             batteryIdentityText.Text = "名稱：" + TextOrUnknown(data.BatteryName) + "\n製造商：" + TextOrUnknown(data.BatteryManufacturer) + "\n電壓：" + (data.VoltageMv.HasValue ? (data.VoltageMv.Value / 1000.0).ToString("0.00", CultureInfo.InvariantCulture) + " V" : "硬體未提供");
             batteryRuntimeText.Text = RuntimeEstimate(data);
+            if (batteryCareText != null)
+            {
+                string observed = data.IsAcLine && !data.IsCharging && data.Percent.HasValue
+                    ? "目前觀察：接電但未充電，電量 " + data.Percent.Value.ToString("0", CultureInfo.InvariantCulture) + "%。這只能作為現象提示，不能確認 80% 上限。"
+                    : "目前沒有足以確認充電上限的硬體回報。";
+                batteryCareText.Text = "目前模式：由 ASUS 韌體／MyASUS 或 Battery Health Charging 控制。\n" +
+                    "Windows 標準電池資料沒有通用的充電上限寫入介面，BatteryPulse 不會用電量猜測或直接改寫設定。\n" + observed;
+            }
         }
 
         private void UpdateTemperatureSources(BatterySnapshot data)
@@ -759,6 +811,76 @@ namespace BatteryPulse
             if (shadowToggle != null) shadowToggle.SetState(settings.TextShadow, false);
             if (topmostToggle != null) topmostToggle.SetState(owner.Topmost, false);
             if (startupToggle != null) startupToggle.SetState(StartupManager.IsEnabled(), false);
+            RefreshTopBarItemsPanel();
+        }
+
+        private void RefreshTopBarItemsPanel()
+        {
+            if (topBarItemsPanel == null) return;
+            topBarItemsPanel.Children.Clear();
+            foreach (string id in settings.GetTopBarItems())
+            {
+                string itemId = id;
+                var row = new Grid
+                {
+                    Height = 42,
+                    Margin = new Thickness(0, 0, 0, 5),
+                    Background = B("#10FFFFFF")
+                };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                row.Children.Add(new TextBlock
+                {
+                    Text = AppSettings.TopBarItemLabel(itemId),
+                    Foreground = B("#FF252A2F"),
+                    FontSize = 10.5,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(12, 0, 8, 0)
+                });
+
+                var toggle = new ToggleSwitch(settings.IsTopBarItemEnabled(itemId));
+                toggle.Changed += delegate(bool value)
+                {
+                    settings.SetTopBarItemEnabled(itemId, value);
+                    settings.Save();
+                };
+                Grid.SetColumn(toggle.Root, 1);
+                row.Children.Add(toggle.Root);
+
+                var order = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(9, 0, 8, 0) };
+                Border up = ActionButton("↑", delegate { MoveTopBarItem(itemId, -1); });
+                Border down = ActionButton("↓", delegate { MoveTopBarItem(itemId, 1); });
+                up.Width = 28;
+                down.Width = 28;
+                up.Margin = new Thickness(0, 0, 4, 0);
+                order.Children.Add(up);
+                order.Children.Add(down);
+                Grid.SetColumn(order, 2);
+                row.Children.Add(order);
+                topBarItemsPanel.Children.Add(new Border
+                {
+                    CornerRadius = new CornerRadius(6),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = B("#16FFFFFF"),
+                    Child = row
+                });
+            }
+        }
+
+        private void MoveTopBarItem(string id, int direction)
+        {
+            List<string> items = settings.GetTopBarItems();
+            int index = items.IndexOf(id);
+            int next = index + direction;
+            if (index < 0 || next < 0 || next >= items.Count) return;
+            string moved = items[index];
+            items[index] = items[next];
+            items[next] = moved;
+            settings.TopBarItems = string.Join(",", items);
+            settings.Save();
+            RefreshTopBarItemsPanel();
         }
 
         private void RefreshFromLatest()
@@ -770,6 +892,7 @@ namespace BatteryPulse
         {
             var root = new Border
             {
+                Width = 230,
                 Margin = new Thickness(0, 0, 10, 0),
                 Padding = new Thickness(16, 14, 16, 13),
                 CornerRadius = new CornerRadius(8),
@@ -1302,6 +1425,13 @@ namespace BatteryPulse
             return value.HasValue ? (value.Value / 1000.0).ToString("0.0", CultureInfo.InvariantCulture) + " Wh" : "--";
         }
 
+        private static string FormatMemory(double usedMib, double totalMib)
+        {
+            if (totalMib <= 0) return "Windows 記憶體資料";
+            return (usedMib / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " / " +
+                (totalMib / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " GiB";
+        }
+
         private static string FormatValue(double? value, string format, string suffix)
         {
             return value.HasValue ? value.Value.ToString(format, CultureInfo.InvariantCulture) + suffix : "--";
@@ -1381,7 +1511,9 @@ namespace BatteryPulse
 
             if (value == "#FF00CA4E" || value == "#FF5CC8A7" || value == "#FF67D9B7" ||
                 value == "#FF77D7B8" || value == "#FF9FD7C5" || value == "#FFB9F0DC" ||
-                value == "#FFD0E5DC") return "#FF8D949B";
+                value == "#FFD0E5DC" || value == "#FF8AC7A8" || value == "#FF9DB7D8" ||
+                value == "#FF6FC4F2" || value == "#FFFFC66D" || value == "#FFC6A0FF" ||
+                value == "#FFFF8A80") return "#FF8D949B";
 
             if (value == "#FFABBBB4" || value == "#FFADBCB5" || value == "#FFB5C4BD" ||
                 value == "#FFB5C5BE" || value == "#FFB7C5BF" || value == "#FFB7C6C0" ||

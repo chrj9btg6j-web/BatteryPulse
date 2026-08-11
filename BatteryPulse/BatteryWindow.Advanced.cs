@@ -547,9 +547,15 @@ namespace BatteryPulse
         public double? BatteryTempC;
         public double? CpuTempC;
         public string CpuSource;
+        public double? CpuUsagePercent;
         public double? GpuTempC;
         public string GpuSource;
+        public double? GpuUsagePercent;
         public string GpuStatus;
+        public double? MemoryUsedPercent;
+        public double? MemoryUsedMib;
+        public double? MemoryTotalMib;
+        public double? ChargeEtaSeconds;
         public bool IsAcLine;
         public string ChargerType;
         public string ChargerTypeSource;
@@ -566,9 +572,15 @@ namespace BatteryPulse
                 BatteryTempC = data.BatteryTempC,
                 CpuTempC = data.CpuTempC,
                 CpuSource = data.CpuTempSource,
+                CpuUsagePercent = data.CpuUsagePercent,
                 GpuTempC = data.GpuTempC,
                 GpuSource = data.GpuTempSource,
+                GpuUsagePercent = data.GpuUsagePercent,
                 GpuStatus = data.GpuStatus,
+                MemoryUsedPercent = data.MemoryUsedPercent,
+                MemoryUsedMib = data.MemoryUsedMib,
+                MemoryTotalMib = data.MemoryTotalMib,
+                ChargeEtaSeconds = data.ChargeEtaSeconds,
                 IsAcLine = data.IsAcLine,
                 ChargerType = data.ChargerType,
                 ChargerTypeSource = data.ChargerTypeSource
@@ -592,7 +604,13 @@ namespace BatteryPulse
                 Csv(GpuStatus),
                 IsAcLine ? "1" : "0",
                 Csv(ChargerType),
-                Csv(ChargerTypeSource)
+                Csv(ChargerTypeSource),
+                Number(MemoryUsedPercent),
+                Number(MemoryUsedMib),
+                Number(MemoryTotalMib),
+                Number(CpuUsagePercent),
+                Number(GpuUsagePercent),
+                Number(ChargeEtaSeconds)
             });
         }
 
@@ -617,7 +635,13 @@ namespace BatteryPulse
                 GpuStatus = cells[10],
                 IsAcLine = cells[11] == "1",
                 ChargerType = cells.Count > 12 && !string.IsNullOrWhiteSpace(cells[12]) ? cells[12] : "未知",
-                ChargerTypeSource = cells.Count > 13 && !string.IsNullOrWhiteSpace(cells[13]) ? cells[13] : "舊版資料未記錄"
+                ChargerTypeSource = cells.Count > 13 && !string.IsNullOrWhiteSpace(cells[13]) ? cells[13] : "舊版資料未記錄",
+                MemoryUsedPercent = cells.Count > 14 ? ParseNumber(cells[14]) : null,
+                MemoryUsedMib = cells.Count > 15 ? ParseNumber(cells[15]) : null,
+                MemoryTotalMib = cells.Count > 16 ? ParseNumber(cells[16]) : null,
+                CpuUsagePercent = cells.Count > 17 ? ParseNumber(cells[17]) : null,
+                GpuUsagePercent = cells.Count > 18 ? ParseNumber(cells[18]) : null,
+                ChargeEtaSeconds = cells.Count > 19 ? ParseNumber(cells[19]) : null
             };
         }
 
@@ -724,7 +748,7 @@ namespace BatteryPulse
     public sealed class TelemetryStore
     {
         public const int RetentionDays = 7;
-        private const string Header = "timestamp,battery_percent,battery_watts,battery_mode,system_watts,battery_temp_c,cpu_temp_c,cpu_source,gpu_temp_c,gpu_source,gpu_status,ac_line";
+        private const string Header = "timestamp,battery_percent,battery_watts,battery_mode,system_watts,battery_temp_c,cpu_temp_c,cpu_source,gpu_temp_c,gpu_source,gpu_status,ac_line,charger_type,charger_type_source,memory_used_percent,memory_used_mib,memory_total_mib,cpu_usage_percent,gpu_usage_percent,charge_eta_seconds";
         private readonly object fileSync = new object();
 
         public void Append(TelemetryPoint point)
