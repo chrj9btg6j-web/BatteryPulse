@@ -28,8 +28,8 @@ namespace BatteryPulse
     public static class UpdateService
     {
         // Public GitHub Release source used by installed copies to find updates.
-        public const string DefaultApiUrl = "https://api.github.com/repos/sam20131212-alt/BatteryPulse/releases/latest";
-        public const string DefaultPageUrl = "https://github.com/sam20131212-alt/BatteryPulse/releases/latest";
+        public const string DefaultApiUrl = "https://api.github.com/repos/chrj9btg6j-web/BatteryPulse/releases/latest";
+        public const string DefaultPageUrl = "https://github.com/chrj9btg6j-web/BatteryPulse/releases/latest";
 
         public static string CurrentVersionText
         {
