@@ -14,8 +14,8 @@
 #define BrandingDir SourceDir + "\assets\branding"
 #define InstallerAssetsDir SourceDir + "\assets\installer"
 #define RuntimeDir SourceDir + "\runtime\LibreHardwareMonitor"
-#define ReleaseDate "2026-08-11"
-#define ReleaseStamp "20260811"
+#define ReleaseDate "2026-08-12"
+#define ReleaseStamp "20260812"
 ; TODO: 請替換成正式產品名稱；此名稱會同時用於安裝資料夾與捷徑。
 #define MyAppName "筆電狀態快顯"
 ; TODO: 每次發佈新版時更新這兩個版本號。

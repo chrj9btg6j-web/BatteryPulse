@@ -456,6 +456,7 @@ namespace BatteryPulse
             metricsRow.Children.Add(OverviewSummaryTile("電池健康", "#FFC6A0FF", out overviewBatteryValue, out overviewBatteryNote));
             metricsRow.Children.Add(BuildOverviewLimitTile());
             body.Children.Add(metricsRow);
+            updateBanner = BuildUpdateBanner();
             body.Children.Add(updateBanner);
 
             body.Children.Add(SectionLabel("需要注意"));

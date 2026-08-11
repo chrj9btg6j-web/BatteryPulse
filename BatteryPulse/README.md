@@ -29,7 +29,7 @@ BatteryPulse.TopBar-v<version>-<yyyymmdd>.exe
 BatteryPulse-Setup-v<version>-<yyyymmdd>.exe
 ```
 
-For example: `BatteryPulse.TopBar-v2.1.0-20260811.exe`.
+For example: `BatteryPulse.TopBar-v2.1.0-20260812.exe`.
 
 ## Build and package
 
@@ -38,7 +38,7 @@ Run these commands from the `BatteryPulse` directory:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\build\build-topbar.ps1
 & .\build\tools\Tools.InnoSetup.6.7.3\tools\ISCC.exe .\BatteryPulse.Installer.iss
-powershell -ExecutionPolicy Bypass -File .\build\package-release.ps1 -Version 2.1.0 -Date 2026-08-11 -InstallerPath '.\dist\current\installer\BatteryPulse-Setup-v2.1.0-20260811.exe'
+powershell -ExecutionPolicy Bypass -File .\build\package-release.ps1 -Version 2.1.0 -Date 2026-08-12 -InstallerPath '.\dist\current\installer\BatteryPulse-Setup-v2.1.0-20260812.exe'
 ```
 
 The first command writes the current executable to `dist\current`. The second command compiles the installer into `dist\current\installer`. The third command creates the dated version folder, copies the executable, installer, and symbols, attaches the daily update note, and writes `SHA256SUMS.txt`.

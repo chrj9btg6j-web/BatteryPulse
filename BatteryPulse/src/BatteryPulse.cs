@@ -218,7 +218,8 @@ namespace BatteryPulse
 
             refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             refreshTimer.Tick += delegate { RefreshBattery(false); };
-            updateTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(30) };
+            // 啟動時會立即檢查；後續每 12 小時檢查一次，避免背景網路與 CPU 使用過於頻繁。
+            updateTimer = new DispatcherTimer { Interval = TimeSpan.FromHours(12) };
             updateTimer.Tick += delegate { CheckForUpdates(); };
             ApplyTextShadow();
         }
