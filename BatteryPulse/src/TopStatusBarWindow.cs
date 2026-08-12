@@ -274,6 +274,14 @@ namespace BatteryPulse
             return "ETA " + Math.Max(1, (int)Math.Round(value.TotalMinutes)).ToString(CultureInfo.InvariantCulture) + "m";
         }
 
+        private static string FormatEstimate(BatterySnapshot data)
+        {
+            if (data == null) return string.Empty;
+            if (data.RuntimeEtaSeconds.HasValue && data.RuntimeEtaSeconds.Value > 0)
+                return "續航 " + FormatEta(data.RuntimeEtaSeconds.Value).Replace("ETA ", string.Empty);
+            return string.Empty;
+        }
+
         private static string FormatPercent(double? value)
         {
             return value.HasValue && value.Value >= 0 && value.Value <= 100
@@ -319,12 +327,12 @@ namespace BatteryPulse
             bool hasPercent = data.Percent.HasValue && data.Percent.Value >= 0;
             bool hasCpu = HasTemperature(data.CpuTempC);
             bool hasGpu = HasTemperature(data.GpuTempC);
-            bool hasEta = data.ChargeEtaSeconds.HasValue && data.ChargeEtaSeconds.Value > 0;
             bool hasRam = data.MemoryUsedPercent.HasValue && data.MemoryUsedPercent.Value >= 0;
             bool hasCpuUsage = data.CpuUsagePercent.HasValue && data.CpuUsagePercent.Value >= 0;
             bool hasGpuUsage = data.GpuUsagePercent.HasValue && data.GpuUsagePercent.Value >= 0;
             bool charging = data.IsAcLine && (data.IsCharging ||
                 (hasChargePower && string.Equals(data.BatteryPowerMode, "充電", StringComparison.OrdinalIgnoreCase)));
+            bool hasEta = data.RuntimeEtaSeconds.HasValue && data.RuntimeEtaSeconds.Value > 0;
             // 放電時的 data.Watts 是電池流出功率，不應再以「充電瓦數」顯示。
             bool showChargeGroup = charging && hasChargePower;
             string type = data.IsAcLine
@@ -348,8 +356,8 @@ namespace BatteryPulse
             cpuText.Visibility = hasCpu && IsItemEnabled("cpuTemp") ? Visibility.Visible : Visibility.Collapsed;
             gpuText.Text = hasGpu ? "GPU " + FormatTemperature(data.GpuTempC) : string.Empty;
             gpuText.Visibility = hasGpu && IsItemEnabled("gpuTemp") ? Visibility.Visible : Visibility.Collapsed;
-            etaText.Text = hasEta ? FormatEta(data.ChargeEtaSeconds.Value) : string.Empty;
-            etaText.Visibility = hasEta && charging && IsItemEnabled("eta") ? Visibility.Visible : Visibility.Collapsed;
+            etaText.Text = hasEta ? FormatEstimate(data) : string.Empty;
+            etaText.Visibility = hasEta && IsItemEnabled("eta") ? Visibility.Visible : Visibility.Collapsed;
             ramText.Text = hasRam ? "RAM " + FormatPercent(data.MemoryUsedPercent) : string.Empty;
             ramText.Visibility = hasRam && IsItemEnabled("ram") ? Visibility.Visible : Visibility.Collapsed;
             cpuUsageText.Text = hasCpuUsage ? "CPU " + FormatPercent(data.CpuUsagePercent) : string.Empty;
@@ -637,9 +645,8 @@ namespace BatteryPulse
                     var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
                     app.DispatcherUnhandledException += delegate(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
                     {
-                        WriteCrash(e.Exception);
+                        RuntimeDiagnostics.Write("TopBar WPF Dispatcher", e.Exception);
                         e.Handled = true;
-                        app.Shutdown(1);
                     };
 
                     var bar = new TopStatusBarWindow();

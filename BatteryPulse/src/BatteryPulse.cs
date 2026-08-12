@@ -72,7 +72,6 @@ namespace BatteryPulse
         private MeterBar batteryBar;
         private MetricRow wattsRow;
         private MetricRow systemWattsRow;
-        private MetricRow batteryTempRow;
         private MetricRow cpuTempRow;
         private MetricRow gpuTempRow;
         private TempScale cpuTempScale;
@@ -391,12 +390,10 @@ namespace BatteryPulse
 
             wattsRow = new MetricRow("電池功率", "#FFD7F3E2");
             systemWattsRow = new MetricRow("電腦耗電", "#FFBCEFD8");
-            batteryTempRow = new MetricRow("電池溫度", "#FFEBD49A");
             cpuTempRow = new MetricRow("CPU 溫度", "#FFDDEFE8");
             gpuTempRow = new MetricRow("NVIDIA 溫度", "#FFDDEFE8");
             panel.Children.Add(wattsRow.Root);
             panel.Children.Add(systemWattsRow.Root);
-            panel.Children.Add(batteryTempRow.Root);
             panel.Children.Add(cpuTempRow.Root);
             panel.Children.Add(gpuTempRow.Root);
             cpuTempScale = new TempScale();
@@ -596,7 +593,14 @@ namespace BatteryPulse
                     Dispatcher.BeginInvoke(new Action(delegate
                     {
                         Interlocked.Exchange(ref refreshInProgress, 0);
-                        if (!closing && data != null) ApplySnapshot(data);
+                        if (!closing && data != null)
+                        {
+                            // Switching ASUS power modes can briefly invalidate a
+                            // sensor or GPU object. A single incomplete frame must
+                            // not take down the WPF dispatcher or close the app.
+                            try { ApplySnapshot(data); }
+                            catch (Exception ex) { RuntimeDiagnostics.Write("套用硬體快照", ex); }
+                        }
                     }), DispatcherPriority.Background);
                 }
                 catch { Interlocked.Exchange(ref refreshInProgress, 0); }
@@ -626,13 +630,11 @@ namespace BatteryPulse
             batteryBar.Set(data.Percent, data.StatusText);
             wattsRow.Root.Visibility = HasPositive(data.Watts) ? Visibility.Visible : Visibility.Collapsed;
             systemWattsRow.Root.Visibility = HasPositive(data.SystemWatts) ? Visibility.Visible : Visibility.Collapsed;
-            batteryTempRow.Root.Visibility = HasPositive(data.BatteryTempC) ? Visibility.Visible : Visibility.Collapsed;
             cpuTempRow.Root.Visibility = HasPositive(data.CpuTempC) ? Visibility.Visible : Visibility.Collapsed;
             cpuTempScale.Root.Visibility = HasPositive(data.CpuTempC) || HasPositive(data.GpuTempC) ? Visibility.Visible : Visibility.Collapsed;
             gpuTempRow.Root.Visibility = HasPositive(data.GpuTempC) ? Visibility.Visible : Visibility.Collapsed;
             wattsRow.Set(FormatBatteryWatts(data), data.Watts.HasValue && data.Watts.Value > 0 ? Math.Min(100, Math.Abs(data.Watts.Value) * 4) : 0);
             systemWattsRow.Set(FormatWatts(data.SystemWatts), data.SystemWatts.HasValue && data.SystemWatts.Value > 0 ? Math.Min(100, Math.Abs(data.SystemWatts.Value) * 2) : 0);
-            batteryTempRow.Set(FormatTemp(data.BatteryTempC), TempScore(data.BatteryTempC));
             cpuTempRow.Set(FormatTemp(data.CpuTempC), TempScore(data.CpuTempC));
             gpuTempRow.Set(FormatTemp(data.GpuTempC), TempScore(data.GpuTempC));
             cpuTempScale.Set(data.CpuTempC, data.CpuTempSource, data.GpuTempC, data.GpuTempSource);
@@ -655,11 +657,18 @@ namespace BatteryPulse
             if (!expanded) return;
             Dispatcher.BeginInvoke(new Action(delegate
             {
-                details.Measure(new Size(Width - 56, double.PositiveInfinity));
-                double target = Math.Max(CollapsedHeight, 154 + details.DesiredSize.Height);
-                BeginAnimation(HeightProperty,
-                    new DoubleAnimation(Height, target, TimeSpan.FromMilliseconds(220))
-                    { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+                try
+                {
+                    details.Measure(new Size(Width - 56, double.PositiveInfinity));
+                    double target = Math.Max(CollapsedHeight, 154 + details.DesiredSize.Height);
+                    BeginAnimation(HeightProperty,
+                        new DoubleAnimation(Height, target, TimeSpan.FromMilliseconds(220))
+                        { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+                }
+                catch (Exception ex)
+                {
+                    RuntimeDiagnostics.Write("調整小工具高度", ex);
+                }
             }), DispatcherPriority.Loaded);
         }
 
@@ -1208,6 +1217,32 @@ namespace BatteryPulse
         }
     }
 
+    public sealed class StorageVolumeSnapshot
+    {
+        public string Name;
+        public double TotalGiB;
+        public double UsedGiB;
+        public double FreeGiB;
+        public double UsedPercent;
+    }
+
+    public sealed class EnergyProcessSnapshot
+    {
+        public string Name;
+        public double SharePercent;
+        public double? EstimatedWatts;
+    }
+
+    // Keeps GPU usage and temperature tied to the same physical adapter.
+    public sealed class GpuDeviceSnapshot
+    {
+        public string Name;
+        public double? UsagePercent;
+        public double? TemperatureC;
+        public string UsageSource;
+        public string TemperatureSource;
+    }
+
     public sealed class BatterySnapshot
     {
         public double? Percent;
@@ -1230,14 +1265,23 @@ namespace BatteryPulse
         public double? StorageFreeGiB;
         public double? StorageTotalGiB;
         public string StorageSource;
+        public List<StorageVolumeSnapshot> StorageVolumes = new List<StorageVolumeSnapshot>();
+        public List<EnergyProcessSnapshot> EnergyRanking = new List<EnergyProcessSnapshot>();
+        public string EnergyRankingSource;
         public double? CpuUsagePercent;
         public string CpuUsageSource;
         public double? GpuUsagePercent;
         public string GpuUsageSource;
+        public string GpuName;
+        public List<GpuDeviceSnapshot> GpuDevices = new List<GpuDeviceSnapshot>();
         public double? VoltageMv;
         public double? BatteryTempC;
+        public double? StorageTempC;
+        public string StorageTempSource;
         public double? DesignCapacityMwh;
         public double? FullChargeCapacityMwh;
+        public double? CurrentCapacityMwh;
+        public string CurrentCapacitySource;
         public double? CycleCount;
         public string BatteryName;
         public string BatteryManufacturer;
@@ -1291,15 +1335,16 @@ namespace BatteryPulse
 
             ReadWmiBattery(data);
             ReadGpuStatus(data);
-            lhmReader.Read(data);
             ReadHardwareMonitorSensors(data);
+            lhmReader.Read(data);
             ReadThermalCounter(data);
             ReadThermalZone(data);
             FinalizePower(data);
             performanceReader.Read(data);
             ChargerTypeDetector.Enrich(data);
             BatteryLimitController.Enrich(data);
-            if (data.GpuTempC.HasValue) data.GpuStatus = "運作中";
+            if (data.GpuUsagePercent.HasValue && data.GpuUsagePercent.Value > 0.5)
+                data.GpuStatus = "\u4f7f\u7528\u4e2d";
             data.SourceNote = SourceNote(data);
             return data;
         }
@@ -1344,6 +1389,12 @@ namespace BatteryPulse
                 double? chargeMw = Number(item, "ChargeRate");
                 double? dischargeMw = Number(item, "DischargeRate");
                 double? currentMw = Number(item, "CurrentRate");
+                double? remainingMwh = Number(item, "RemainingCapacity");
+                if (remainingMwh.HasValue && remainingMwh.Value > 0)
+                {
+                    data.CurrentCapacityMwh = remainingMwh.Value;
+                    data.CurrentCapacitySource = "Windows BatteryStatus / RemainingCapacity";
+                }
                 bool hasCharge = chargeMw.HasValue && chargeMw.Value > 0;
                 bool hasDischarge = dischargeMw.HasValue && dischargeMw.Value > 0;
                 bool chargeSignal = hasCharge && (data.IsCharging ||
@@ -1428,6 +1479,13 @@ namespace BatteryPulse
                 object status = item["Status"];
                 if (status != null && !string.IsNullOrWhiteSpace(status.ToString())) data.StatusText = status.ToString();
             });
+
+            if (!data.CurrentCapacityMwh.HasValue && data.FullChargeCapacityMwh.HasValue && data.Percent.HasValue &&
+                data.FullChargeCapacityMwh.Value > 0 && data.Percent.Value >= 0)
+            {
+                data.CurrentCapacityMwh = data.FullChargeCapacityMwh.Value * Math.Max(0, Math.Min(100, data.Percent.Value)) / 100.0;
+                data.CurrentCapacitySource = "Windows BatteryStatus / 電量百分比推算";
+            }
         }
 
         private static void ReadGpuStatus(BatterySnapshot data)
@@ -1547,6 +1605,16 @@ namespace BatteryPulse
                                 : "OpenHardwareMonitor");
                     }
                 }
+
+                if (HardwareTemperatureClassifier.IsStorageTemperatureSensor(haystack) &&
+                    HardwareTemperatureClassifier.ShouldUseStorageTemp(haystack, name, data))
+                {
+                    data.StorageTempC = value.Value;
+                    string monitor = scope.IndexOf("Libre", StringComparison.OrdinalIgnoreCase) >= 0
+                        ? "LibreHardwareMonitor"
+                        : "OpenHardwareMonitor";
+                    data.StorageTempSource = monitor + " / " + (string.IsNullOrWhiteSpace(name) ? "儲存裝置" : name);
+                }
             });
         }
 
@@ -1641,7 +1709,7 @@ namespace BatteryPulse
             parts.Add("1 秒背景更新");
             if (!data.Watts.HasValue) parts.Add("瓦數 N/A");
             if (!data.SystemWatts.HasValue) parts.Add("電腦耗電 N/A");
-            if (!data.BatteryTempC.HasValue) parts.Add("電池溫度 N/A");
+            if (!data.StorageTempC.HasValue) parts.Add("儲存裝置溫度 N/A");
             if (!data.CpuTempC.HasValue) parts.Add("CPU 溫度 N/A");
             if (!data.GpuTempC.HasValue) parts.Add("GPU 溫度 N/A");
             return string.Join(" · ", parts.ToArray());
@@ -1657,6 +1725,27 @@ namespace BatteryPulse
             if (ContainsAny(text, "nvidia", "geforce", "rtx", "gtx", "gpu")) return true;
             if (IsCpuText(text)) return false;
             return ContainsAny(text, "radeon", "vega", "uhd graphics", "iris", "arc graphics", "graphics");
+        }
+
+        public static bool IsStorageTemperatureSensor(string haystack)
+        {
+            string text = Lower(haystack);
+            if (string.IsNullOrEmpty(text) || IsCpuText(text) ||
+                ContainsAny(text, "battery", "batt", "gpu", "nvidia", "geforce", "radeon", "graphics"))
+                return false;
+            return ContainsAny(text, "nvme", "ssd", "hdd", "hard disk", "storage", "drive", "disk", "s.m.a.r.t", "smart");
+        }
+
+        public static bool ShouldUseStorageTemp(string haystack, string sensorName, BatterySnapshot data)
+        {
+            if (data == null || !data.StorageTempC.HasValue) return true;
+            string candidate = Lower(haystack + " " + sensorName);
+            string current = Lower(data.StorageTempSource);
+            bool candidateNvme = ContainsAny(candidate, "nvme", "ssd");
+            bool currentNvme = ContainsAny(current, "nvme", "ssd");
+            if (candidateNvme && !currentNvme) return true;
+            if (currentNvme && !candidateNvme) return false;
+            return false;
         }
 
         public static bool IsGpuHardware(string hardwareType, string hardwareName)
@@ -1746,7 +1835,8 @@ namespace BatteryPulse
         public string UpdateApiUrl = UpdateService.DefaultApiUrl;
         public string UpdatePageUrl = UpdateService.DefaultPageUrl;
         public string TopBarItems = "charger,charge,percent,power,cpuTemp,gpuTemp,eta,ram,cpuUsage,gpuUsage";
-        public string TopBarHiddenItems = "eta,ram,cpuUsage,gpuUsage";
+        public string TopBarHiddenItems = "ram,cpuUsage,gpuUsage";
+        public bool TopBarEtaDefaultApplied;
         public double DayWh;
         public double MonthWh;
         public string DayKey = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -1781,7 +1871,11 @@ namespace BatteryPulse
             var settings = new AppSettings();
             try
             {
-                if (!File.Exists(PathName)) return settings;
+                if (!File.Exists(PathName))
+                {
+                    settings.TopBarEtaDefaultApplied = true;
+                    return settings;
+                }
                 foreach (string line in File.ReadAllLines(PathName))
                 {
                     int idx = line.IndexOf('=');
@@ -1806,6 +1900,7 @@ namespace BatteryPulse
                     if (key == "updatePageUrl" && !string.IsNullOrWhiteSpace(value)) settings.UpdatePageUrl = value.Trim();
                     if (key == "topBarItems" && !string.IsNullOrWhiteSpace(value)) settings.TopBarItems = value;
                     if (key == "topBarHiddenItems") settings.TopBarHiddenItems = value;
+                    if (key == "topBarEtaDefaultApplied") settings.TopBarEtaDefaultApplied = value == "1";
                     if (key == "dayWh") settings.DayWh = ParseDouble(value);
                     if (key == "monthWh") settings.MonthWh = ParseDouble(value);
                     if (key == "dayKey" && !string.IsNullOrWhiteSpace(value)) settings.DayKey = value;
@@ -1814,6 +1909,13 @@ namespace BatteryPulse
                 }
             }
             catch { }
+            if (!settings.TopBarEtaDefaultApplied)
+            {
+                // 舊版曾預設隱藏 ETA；只遷移一次，之後仍允許使用者自行關閉。
+                settings.SetTopBarItemEnabled("eta", true);
+                settings.TopBarEtaDefaultApplied = true;
+                settings.Save();
+            }
             return settings;
         }
 
@@ -1841,6 +1943,7 @@ namespace BatteryPulse
                     "updatePageUrl=" + UpdatePageUrl,
                     "topBarItems=" + TopBarItems,
                     "topBarHiddenItems=" + TopBarHiddenItems,
+                    "topBarEtaDefaultApplied=" + (TopBarEtaDefaultApplied ? "1" : "0"),
                     "dayWh=" + DayWh.ToString("R", CultureInfo.InvariantCulture),
                     "monthWh=" + MonthWh.ToString("R", CultureInfo.InvariantCulture),
                     "dayKey=" + DayKey,
@@ -1892,7 +1995,7 @@ namespace BatteryPulse
                 case "power": return "電腦耗電";
                 case "cpuTemp": return "CPU 溫度";
                 case "gpuTemp": return "GPU 溫度";
-                case "eta": return "預估完成時間";
+                case "eta": return "續行";
                 case "ram": return "RAM 使用率";
                 case "cpuUsage": return "CPU 使用率";
                 case "gpuUsage": return "GPU 使用率";
@@ -1930,10 +2033,15 @@ namespace BatteryPulse
             try
             {
                 EnsureInitialized();
-                if (computer == null) return;
+                if (computer == null)
+                {
+                    ClearUnpairedGpuData(data);
+                    return;
+                }
                 object hardwareList = computer.GetType().GetProperty("Hardware").GetValue(computer, null);
                 ScanHardwareList(hardwareList, data);
-                if (data.GpuTempC.HasValue)
+                SelectActiveGpu(data);
+                if (data.GpuTempC.HasValue || data.GpuUsagePercent.HasValue)
                 {
                     gpuMissReads = 0;
                 }
@@ -1948,7 +2056,18 @@ namespace BatteryPulse
                         ResetComputer();
                 }
             }
-            catch { }
+            catch
+            {
+                ClearUnpairedGpuData(data);
+            }
+        }
+
+        private static void ClearUnpairedGpuData(BatterySnapshot data)
+        {
+            if (data == null || data.GpuUsagePercent.HasValue) return;
+            data.GpuName = null;
+            data.GpuTempC = null;
+            data.GpuTempSource = null;
         }
 
         private void EnsureInitialized()
@@ -2063,12 +2182,20 @@ namespace BatteryPulse
                 if (value.Value < 0 || value.Value > 100) return;
                 bool gpuHardware = HardwareTemperatureClassifier.IsGpuHardware(hardwareType, hardwareName);
                 bool gpuLoad = gpuHardware && (haystack.IndexOf("3d", StringComparison.Ordinal) >= 0 ||
+                    haystack.IndexOf("d3d", StringComparison.Ordinal) >= 0 ||
                     haystack.IndexOf("core", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("gpu", StringComparison.Ordinal) >= 0);
-                if (gpuLoad && (!data.GpuUsagePercent.HasValue || value.Value > data.GpuUsagePercent.Value))
+                    haystack.IndexOf("gpu", StringComparison.Ordinal) >= 0 ||
+                    haystack.IndexOf("compute", StringComparison.Ordinal) >= 0 ||
+                    haystack.IndexOf("video decode", StringComparison.Ordinal) >= 0 ||
+                    haystack.IndexOf("video encode", StringComparison.Ordinal) >= 0);
+                if (gpuLoad)
                 {
-                    data.GpuUsagePercent = value.Value;
-                    data.GpuUsageSource = "LibreHardwareMonitor " + sensorName;
+                    GpuDeviceSnapshot gpu = GetGpuDevice(data, hardwareType, hardwareName);
+                    if (!gpu.UsagePercent.HasValue || value.Value > gpu.UsagePercent.Value)
+                    {
+                        gpu.UsagePercent = value.Value;
+                        gpu.UsageSource = "LibreHardwareMonitor / " + sensorName;
+                    }
                 }
                 return;
             }
@@ -2100,12 +2227,74 @@ namespace BatteryPulse
 
             if (HardwareTemperatureClassifier.IsGpuHardware(hardwareType, hardwareName))
             {
-                if (HardwareTemperatureClassifier.ShouldUseGpuTemp(haystack, sensorName, value.Value, data))
+                GpuDeviceSnapshot gpu = GetGpuDevice(data, hardwareType, hardwareName);
+                if (!gpu.TemperatureC.HasValue || IsPreferredGpuTemperature(sensorName, value.Value, gpu))
                 {
-                    data.GpuTempC = value.Value;
-                    data.GpuTempSource = HardwareTemperatureClassifier.GpuSourceLabel(haystack, sensorName, "LibreHardwareMonitor");
+                    gpu.TemperatureC = value.Value;
+                    gpu.TemperatureSource = "LibreHardwareMonitor / " + sensorName;
                 }
             }
+        }
+
+        private static GpuDeviceSnapshot GetGpuDevice(BatterySnapshot data, string hardwareType, string hardwareName)
+        {
+            string key = string.IsNullOrWhiteSpace(hardwareName) ? hardwareType : hardwareName;
+            if (string.IsNullOrWhiteSpace(key)) key = "GPU";
+            key = key.Trim();
+
+            foreach (GpuDeviceSnapshot item in data.GpuDevices)
+            {
+                if (string.Equals(item.Name, key, StringComparison.OrdinalIgnoreCase)) return item;
+            }
+
+            var created = new GpuDeviceSnapshot { Name = key };
+            data.GpuDevices.Add(created);
+            return created;
+        }
+
+        private static bool IsPreferredGpuTemperature(string sensorName, double candidate, GpuDeviceSnapshot current)
+        {
+            string candidateName = (sensorName ?? string.Empty).ToLowerInvariant();
+            string currentName = (current.TemperatureSource ?? string.Empty).ToLowerInvariant();
+            bool candidateCore = candidateName.IndexOf("gpu core", StringComparison.Ordinal) >= 0 ||
+                candidateName.IndexOf("core", StringComparison.Ordinal) >= 0;
+            bool currentCore = currentName.IndexOf("gpu core", StringComparison.Ordinal) >= 0 ||
+                currentName.IndexOf("core", StringComparison.Ordinal) >= 0;
+            if (candidateCore && !currentCore) return true;
+            if (currentCore && !candidateCore) return false;
+            return candidate > current.TemperatureC.Value;
+        }
+
+        private static void SelectActiveGpu(BatterySnapshot data)
+        {
+            GpuDeviceSnapshot active = data.GpuDevices
+                .Where(delegate(GpuDeviceSnapshot item)
+                {
+                    return item.UsagePercent.HasValue && item.UsagePercent.Value > 0.5;
+                })
+                .OrderByDescending(delegate(GpuDeviceSnapshot item) { return item.UsagePercent.Value; })
+                .FirstOrDefault();
+
+            if (active == null)
+            {
+                // Do not expose an idle adapter's temperature when no adapter has
+                // a measurable workload. The UI can then show -- honestly.
+                data.GpuName = null;
+                data.GpuUsagePercent = null;
+                data.GpuUsageSource = null;
+                data.GpuTempC = null;
+                data.GpuTempSource = null;
+                if (data.GpuDevices.Count > 0)
+                    data.GpuStatus = "\u672a\u5075\u6e2c\u5230\u4f7f\u7528\u4e2d\u7684 GPU";
+                return;
+            }
+
+            data.GpuName = active.Name;
+            data.GpuUsagePercent = active.UsagePercent;
+            data.GpuUsageSource = active.UsageSource;
+            data.GpuTempC = active.TemperatureC;
+            data.GpuTempSource = active.TemperatureSource;
+            data.GpuStatus = "\u4f7f\u7528\u4e2d";
         }
 
         private static void ReadPowerSensor(string haystack, string sensorName, double watts, BatterySnapshot data)
@@ -2426,9 +2615,8 @@ namespace BatteryPulse
                     var app = new System.Windows.Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
                     app.DispatcherUnhandledException += delegate(object sender, DispatcherUnhandledExceptionEventArgs e)
                     {
-                        WriteCrash(e.Exception);
+                        RuntimeDiagnostics.Write("WPF Dispatcher", e.Exception);
                         e.Handled = true;
-                        app.Shutdown(1);
                     };
                     var window = new BatteryWindow();
                     app.MainWindow = window;
@@ -2444,6 +2632,31 @@ namespace BatteryPulse
             try
             {
                 File.WriteAllText(System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "BatteryPulse.crash.log"), ex.ToString());
+            }
+            catch { }
+        }
+    }
+
+    internal static class RuntimeDiagnostics
+    {
+        private static readonly object Sync = new object();
+        private static DateTime lastWrite = DateTime.MinValue;
+
+        public static void Write(string stage, Exception ex)
+        {
+            if (ex == null) return;
+            try
+            {
+                lock (Sync)
+                {
+                    // Avoid turning a transient sensor fault into a disk-writing loop.
+                    if ((DateTime.Now - lastWrite).TotalSeconds < 5) return;
+                    lastWrite = DateTime.Now;
+                    string path = Path.Combine(AppSettings.AppDirectory, "runtime-diagnostics.log");
+                    string line = DateTime.Now.ToString("o", CultureInfo.InvariantCulture) +
+                        " [" + (stage ?? "runtime") + "] " + ex + Environment.NewLine;
+                    File.AppendAllText(path, line, Encoding.UTF8);
+                }
             }
             catch { }
         }

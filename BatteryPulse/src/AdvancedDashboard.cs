@@ -10,6 +10,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Markup;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -18,6 +19,9 @@ namespace BatteryPulse
 {
     public sealed class AdvancedDashboard
     {
+        private const double OverviewCardHeight = 150;
+        private const double OverviewCardGap = 12;
+
         private readonly BatteryWindow owner;
         private readonly AppSettings settings;
         private readonly TelemetryStore store;
@@ -25,13 +29,12 @@ namespace BatteryPulse
         private readonly Dictionary<string, List<MetricView>> metrics = new Dictionary<string, List<MetricView>>();
         private readonly List<AdvancedNavVisual> navVisuals = new List<AdvancedNavVisual>();
         private readonly List<FrameworkElement> pages = new List<FrameworkElement>();
-        private readonly string[] pageTitles = { "總覽", "電源與 PD", "溫度", "電池健康", "30 分鐘趨勢", "每日資料", "智慧警示", "設定" };
+        private readonly string[] pageTitles = { "總覽", "電源", "溫度", "30 分鐘趨勢", "每日資料", "智慧警示", "設定" };
         private readonly string[] pageSubtitles =
         {
-            "目前電量、供電來源與需要留意的狀態",
-            "供電來源、電腦耗電與電池流向",
-            "CPU、NVIDIA 與電池感測來源",
-            "設計容量、滿充容量、循環與續航估算",
+            "目前電量、供電狀態與需要留意的狀態",
+            "供電、電池狀態、耗能排行與功率變化",
+            "CPU、GPU 與儲存裝置感測來源",
             "最近 30 分鐘的功率與溫度變化",
             "每日一份資料，系統內保留最近七天",
             "只在狀態持續或確實需要處理時提醒",
@@ -51,6 +54,8 @@ namespace BatteryPulse
         private TextBlock sidebarState;
         private TextBlock pdDetailText;
         private TextBlock powerSourceText;
+        private StackPanel energyRankingList;
+        private TextBlock energyRankingSource;
         private TextBlock temperatureSourceText;
         private TextBlock batteryRuntimeText;
         private TextBlock batteryIdentityText;
@@ -60,8 +65,6 @@ namespace BatteryPulse
         private TextBlock overviewChargeNote;
         private TextBlock overviewChargeEtaValue;
         private TextBlock overviewChargeEtaNote;
-        private TextBlock overviewRuntimeValue;
-        private TextBlock overviewRuntimeNote;
         private TextBlock overviewSystemValue;
         private TextBlock overviewSystemNote;
         private TextBlock overviewTemperatureValue;
@@ -72,8 +75,9 @@ namespace BatteryPulse
         private TextBlock overviewMemoryNote;
         private TextBlock overviewStorageValue;
         private TextBlock overviewStorageNote;
-        private TextBlock overviewBatteryValue;
-        private TextBlock overviewBatteryNote;
+        private RingMetricVisual overviewBatteryRing;
+        private RingMetricVisual overviewStorageRing;
+        private RingMetricVisual overviewMemoryRing;
         private TextBlock overviewLimitValue;
         private TextBlock overviewLimitNote;
         private Panel overviewLimitOptions;
@@ -97,6 +101,10 @@ namespace BatteryPulse
         private StackPanel alertsList;
         private StackPanel dailyList;
         private StackPanel topBarItemsPanel;
+        private TextBlock topBarOrderStatus;
+        private Border topBarDropGuide;
+        private int topBarDragIndex = -1;
+        private Point topBarDragStart;
         private TelemetryChart powerChart;
         private TelemetryChart temperatureChart;
         private TelemetryChart trendChart;
@@ -176,10 +184,11 @@ namespace BatteryPulse
             SetMetric("battery", FormatPercent(data.Percent), data.StatusText);
             SetMetric("system", FormatValue(data.SystemWatts, "0.0", " W"), data.SystemWatts.HasValue ? data.SystemWattsSource : "--");
             SetMetric("cpu", FormatTemperature(data.CpuTempC), TemperatureState(data.CpuTempC, settings.CpuWarnC));
-            SetMetric("gpu", FormatTemperature(data.GpuTempC), string.IsNullOrEmpty(data.GpuStatus) ? "未偵測" : data.GpuStatus);
-            SetMetric("battery_temp", FormatTemperature(data.BatteryTempC), data.BatteryTempC.HasValue ? "電池感測器" : "硬體未提供");
+            SetMetric("gpu", FormatTemperature(data.GpuTempC), GpuMetricNote(data));
+            SetMetric("storage_temp", FormatTemperature(data.StorageTempC), data.StorageTempC.HasValue ? data.StorageTempSource : "硬體未提供");
 
             UpdatePowerSafe(data);
+            UpdateEnergyRanking(data);
             UpdateBattery(data);
             UpdateBatteryLimitCareText(data);
             UpdateTemperatureSources(data);
@@ -271,9 +280,9 @@ namespace BatteryPulse
                 MaxHeight = 600,
                 VerticalAlignment = VerticalAlignment.Top
             };
-            string[] titles = { "總覽", "電源與 PD", "溫度", "電池健康", "30 分鐘趨勢", "每日資料", "智慧警示", "設定" };
-            string[] notes = { "", "", "", "", "", "", "", "" };
-            string[] icons = { "⌂", "⌁", "°", "▣", "⌇", "↓", "!", "⚙" };
+            string[] titles = { "總覽", "電源", "溫度", "30 分鐘趨勢", "每日資料", "智慧警示", "設定" };
+            string[] notes = { "", "", "", "", "", "", "" };
+            string[] icons = { "⌂", "⌁", "°", "⌇", "↓", "!", "⚙" };
             for (int i = 0; i < titles.Length; i++)
             {
                 AdvancedNavVisual visual = CreateNavItem(i, icons[i], titles[i], notes[i]);
@@ -428,7 +437,6 @@ namespace BatteryPulse
             pages.Add(BuildOverviewPage());
             pages.Add(BuildPowerPage());
             pages.Add(BuildTemperaturePage());
-            pages.Add(BuildBatteryPage());
             pages.Add(BuildTrendPage());
             pages.Add(BuildDataPage());
             pages.Add(BuildAlertsPage());
@@ -439,23 +447,21 @@ namespace BatteryPulse
         {
             StackPanel body = PageBody();
             body.Children.Add(SectionLabel("核心狀態"));
-            var metricsRow = new WrapPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 0, 0, 10)
-            };
-            metricsRow.Children.Add(OverviewSummaryTile("目前狀態", "#FF67D9B7", out overviewStateValue, out overviewStateNote));
-            metricsRow.Children.Add(OverviewSummaryTile("充電瓦數", "#FF6FC4F2", out overviewChargeValue, out overviewChargeNote));
-            metricsRow.Children.Add(OverviewSummaryTile("充電預估", "#FF6FC4F2", out overviewChargeEtaValue, out overviewChargeEtaNote));
-            metricsRow.Children.Add(OverviewSummaryTile("可用時間", "#FF8AC7A8", out overviewRuntimeValue, out overviewRuntimeNote));
-            metricsRow.Children.Add(OverviewSummaryTile("電腦耗電", "#FF8AC7A8", out overviewSystemValue, out overviewSystemNote));
-            metricsRow.Children.Add(OverviewSummaryTile("溫度", "#FFFFC66D", out overviewTemperatureValue, out overviewTemperatureNote));
-            metricsRow.Children.Add(OverviewSummaryTile("使用率", "#FF8DB6E8", out overviewUsageValue, out overviewUsageNote));
-            metricsRow.Children.Add(OverviewSummaryTile("記憶體", "#FF9DB7D8", out overviewMemoryValue, out overviewMemoryNote));
-            metricsRow.Children.Add(OverviewSummaryTile("儲存空間", "#FF9DB7D8", out overviewStorageValue, out overviewStorageNote));
-            metricsRow.Children.Add(OverviewSummaryTile("電池健康", "#FFC6A0FF", out overviewBatteryValue, out overviewBatteryNote));
-            metricsRow.Children.Add(BuildOverviewLimitTile());
-            body.Children.Add(metricsRow);
+            var metricsGrid = new Grid { Margin = new Thickness(0, 0, 0, 10) };
+            for (int column = 0; column < 3; column++)
+                metricsGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            for (int row = 0; row < 3; row++)
+                metricsGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(OverviewCardHeight + OverviewCardGap) });
+
+            AddOverviewCard(metricsGrid, OverviewStatusPowerTile(), 0, 0);
+            AddOverviewCard(metricsGrid, OverviewSummaryTile("充電／續航預估", "#FF9AA5AD", out overviewChargeEtaValue, out overviewChargeEtaNote), 0, 1);
+            AddOverviewCard(metricsGrid, BuildOverviewLimitTile(), 0, 2);
+            AddOverviewCard(metricsGrid, OverviewPowerTile(), 1, 0);
+            AddOverviewCard(metricsGrid, OverviewSummaryTile("CPU／GPU 溫度", "#FF9AA5AD", out overviewTemperatureValue, out overviewTemperatureNote), 1, 1);
+            AddOverviewCard(metricsGrid, OverviewSummaryTile("CPU／GPU 使用率", "#FF9AA5AD", out overviewUsageValue, out overviewUsageNote), 1, 2);
+            AddOverviewCard(metricsGrid, OverviewMemoryTile(), 2, 0);
+            AddOverviewCard(metricsGrid, OverviewStorageTile(), 2, 1, 2);
+            body.Children.Add(metricsGrid);
             updateBanner = BuildUpdateBanner();
             body.Children.Add(updateBanner);
 
@@ -469,24 +475,80 @@ namespace BatteryPulse
             StackPanel body = PageBody();
             body.Children.Add(SectionLabel("供電狀態"));
             var row = MetricGrid(4);
-            row.Children.Add(MetricTile("pd_status", "供電來源", "#FF67D9B7"));
+            row.Children.Add(MetricTile("pd_status", "電源狀態", "#FF67D9B7"));
             row.Children.Add(MetricTile("pd_input", "電腦耗電", "#FF6FC4F2"));
-            row.Children.Add(MetricTile("pd_margin", "供電餘裕", "#FFFFC66D"));
+            row.Children.Add(MetricTile("pd_margin", "充電器類型", "#FFFFC66D"));
             row.Children.Add(MetricTile("battery_flow", "電池流向", "#FFC6A0FF"));
             body.Children.Add(row);
 
+            AddBatterySection(body);
+
+            body.Children.Add(SectionLabel("耗能排行"));
+            body.Children.Add(BuildEnergyRankingBand());
+
+            body.Children.Add(SectionLabel("功率變化"));
+            powerChart = new TelemetryChart(TelemetryChartMode.PowerAndBattery) { Height = 310 };
+            body.Children.Add(ChartBand(powerChart, false));
+
             var split = TwoColumnGrid();
             Border detail = InformationBand("判讀結果", "#FF67D9B7", out pdDetailText);
-            Border source = InformationBand("測量方式", "#FF6FC4F2", out powerSourceText);
+            Border source = InformationBand("讀值來源", "#FF6FC4F2", out powerSourceText);
             split.Children.Add(detail);
             Grid.SetColumn(source, 1);
             split.Children.Add(source);
             body.Children.Add(split);
-
-            body.Children.Add(SectionLabel("功率變化"));
-            powerChart = new TelemetryChart(TelemetryChartMode.Power) { Height = 310 };
-            body.Children.Add(ChartBand(powerChart, false));
             return PageScroll(body);
+        }
+
+        private Border BuildEnergyRankingBand()
+        {
+            var panel = new StackPanel();
+            var header = new Grid();
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+            header.Children.Add(new TextBlock
+            {
+                Text = "程序",
+                Foreground = B("#FF6D757D"),
+                FontSize = 10.5,
+                FontWeight = FontWeights.SemiBold
+            });
+            var ratioHeader = new TextBlock
+            {
+                Text = "耗能比例",
+                Foreground = B("#FF6D757D"),
+                FontSize = 10.5,
+                FontWeight = FontWeights.SemiBold,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            Grid.SetColumn(ratioHeader, 1);
+            header.Children.Add(ratioHeader);
+            panel.Children.Add(header);
+
+            energyRankingList = new StackPanel { Margin = new Thickness(0, 9, 0, 0) };
+            panel.Children.Add(energyRankingList);
+            energyRankingSource = new TextBlock
+            {
+                Text = "等待第二次取樣",
+                Foreground = B("#FF8A959D"),
+                FontSize = 9,
+                Margin = new Thickness(0, 10, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            panel.Children.Add(energyRankingSource);
+
+            var root = new Border
+            {
+                Padding = new Thickness(16, 14, 16, 13),
+                Margin = new Thickness(0, 0, 0, 22),
+                CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1),
+                BorderBrush = B("#27FFFFFF"),
+                Background = B("#13FFFFFF"),
+                Child = panel
+            };
+            AttachSoftHover(root);
+            return root;
         }
 
         private FrameworkElement BuildTemperaturePage()
@@ -495,25 +557,25 @@ namespace BatteryPulse
             body.Children.Add(SectionLabel("目前溫度"));
             var row = MetricGrid(3);
             row.Children.Add(MetricTile("cpu", "CPU 溫度", "#FFFFC66D"));
-            row.Children.Add(MetricTile("gpu", "NVIDIA 溫度", "#FFC6A0FF"));
-            row.Children.Add(MetricTile("battery_temp", "電池溫度", "#FF67D9B7"));
+            row.Children.Add(MetricTile("gpu", "GPU 溫度", "#FFC6A0FF"));
+            row.Children.Add(MetricTile("storage_temp", "儲存裝置溫度", "#FF67D9B7"));
             body.Children.Add(row);
 
-            body.Children.Add(InformationBand("感測來源", "#FF6FC4F2", out temperatureSourceText));
             body.Children.Add(SectionLabel("30 分鐘溫度變化"));
             temperatureChart = new TelemetryChart(TelemetryChartMode.Temperature) { Height = 340 };
             body.Children.Add(ChartBand(temperatureChart, false));
+            body.Children.Add(InformationBand("感測來源", "#FF6FC4F2", out temperatureSourceText));
             return PageScroll(body);
         }
 
-        private FrameworkElement BuildBatteryPage()
+        private void AddBatterySection(StackPanel body)
         {
-            StackPanel body = PageBody();
-            body.Children.Add(SectionLabel("健康狀態"));
+            if (body == null) return;
+            body.Children.Add(SectionLabel("電池狀態"));
             body.Children.Add(BuildBatteryStatusVisual());
             var row = MetricGrid(4);
             row.Children.Add(MetricTile("battery_health", "健康度", "#FF67D9B7"));
-            row.Children.Add(MetricTile("full_capacity", "目前滿充容量", "#FF6FC4F2"));
+            row.Children.Add(MetricTile("current_capacity", "目前容量", "#FF6FC4F2"));
             row.Children.Add(MetricTile("design_capacity", "設計容量", "#FFFFC66D"));
             row.Children.Add(MetricTile("cycles", "循環次數", "#FFC6A0FF"));
             body.Children.Add(row);
@@ -526,7 +588,22 @@ namespace BatteryPulse
             split.Children.Add(identity);
             body.Children.Add(split);
             body.Children.Add(InformationBand("充電上限／電池保護", "#FF8AC7A8", out batteryCareText));
-            return PageScroll(body);
+        }
+
+        private static void AddOverviewCard(Grid grid, Border card, int row, int column, int columnSpan)
+        {
+            if (grid == null || card == null) return;
+            Grid.SetRow(card, row);
+            Grid.SetColumn(card, column);
+            if (columnSpan > 1) Grid.SetColumnSpan(card, columnSpan);
+            double rightGap = column + columnSpan >= 3 ? 0 : OverviewCardGap;
+            card.Margin = new Thickness(card.Margin.Left, card.Margin.Top, rightGap, card.Margin.Bottom);
+            grid.Children.Add(card);
+        }
+
+        private static void AddOverviewCard(Grid grid, Border card, int row, int column)
+        {
+            AddOverviewCard(grid, card, row, column, 1);
         }
 
         private Border BuildBatteryStatusVisual()
@@ -702,12 +779,9 @@ namespace BatteryPulse
             // Do not expose a switch until the current state is readable. A
             // write-capable endpoint without read-back is not enough to prove
             // which state the switch should represent.
-            bool showControls = capabilities.Supported && capabilities.CanWrite && capabilities.CurrentPercent.HasValue;
             UpdateBatteryLimitOptions(overviewLimitOptions, capabilities);
             if (overviewLimitCustomRow != null)
                 overviewLimitCustomRow.Visibility = Visibility.Collapsed;
-            if (overviewLimitCard != null)
-                overviewLimitCard.Height = showControls ? 156 : 104;
         }
 
         private void UpdateBatteryLimitOptions(Panel options, BatteryLimitCapabilities capabilities)
@@ -962,7 +1036,7 @@ namespace BatteryPulse
             body.Children.Add(SectionLabel("頂端狀態列"));
             body.Children.Add(new TextBlock
             {
-                Text = "只顯示有讀值的項目；可用上下按鈕調整順序。展開進階頁時頂端列仍會保留。",
+                Text = "只顯示有讀值的項目；按住項目拖動，灰線表示放置位置，放開後立即套用。展開進階頁時頂端列仍會保留。",
                 Foreground = B("#FF6D757D"),
                 FontSize = 9.5,
                 TextWrapping = TextWrapping.Wrap,
@@ -970,6 +1044,14 @@ namespace BatteryPulse
             });
             topBarItemsPanel = new StackPanel();
             body.Children.Add(topBarItemsPanel);
+            topBarOrderStatus = new TextBlock
+            {
+                Text = "尚未變更順序",
+                Foreground = B("#FF7B858D"),
+                FontSize = 9.5,
+                Margin = new Thickness(0, 7, 0, 0)
+            };
+            body.Children.Add(topBarOrderStatus);
             RefreshTopBarItemsPanel();
 
             body.Children.Add(SectionLabel("資料"));
@@ -984,6 +1066,11 @@ namespace BatteryPulse
 
         private void UpdateOverviewCards(BatterySnapshot data)
         {
+            if (overviewBatteryRing != null)
+            {
+                string batteryCaption = data.IsCharging ? "充電中" : (data.IsAcLine ? "外接電源" : "電池供電");
+                overviewBatteryRing.Set(data.Percent, FormatPercent(data.Percent), batteryCaption);
+            }
             if (overviewChargeValue != null)
             {
                 bool hasCharge = data.IsCharging && data.Watts.HasValue && data.Watts.Value > 0;
@@ -1001,14 +1088,16 @@ namespace BatteryPulse
                 bool hasCpu = data.CpuTempC.HasValue;
                 bool hasGpu = data.GpuTempC.HasValue;
                 overviewTemperatureValue.Text = FormatTemperaturePair(data.CpuTempC, data.GpuTempC);
-                overviewTemperatureNote.Text = (hasCpu || hasGpu) ? TemperatureOverviewState(data) : "--";
+                overviewTemperatureNote.Text = (hasCpu || hasGpu)
+                    ? TemperatureOverviewState(data) + GpuModelNote(data)
+                    : "--";
             }
             if (overviewUsageValue != null)
             {
                 bool hasCpu = data.CpuUsagePercent.HasValue;
                 bool hasGpu = data.GpuUsagePercent.HasValue;
                 overviewUsageValue.Text = FormatUsagePair(data.CpuUsagePercent, data.GpuUsagePercent);
-                overviewUsageNote.Text = (hasCpu || hasGpu) ? "CPU／GPU 即時" : "--";
+                overviewUsageNote.Text = (hasCpu || hasGpu) ? "CPU／GPU 即時" + GpuModelNote(data) : "--";
             }
             if (overviewMemoryValue != null)
             {
@@ -1017,12 +1106,25 @@ namespace BatteryPulse
                     ? FormatMemory(data.MemoryUsedMib.Value, data.MemoryTotalMib.Value)
                     : "--";
             }
+            if (overviewMemoryRing != null)
+            {
+                overviewMemoryRing.Set(
+                    data.MemoryUsedPercent,
+                    FormatPercent(data.MemoryUsedPercent),
+                    data.MemoryUsedPercent.HasValue ? "\u5df2\u4f7f\u7528" : "--");
+            }
             if (overviewStorageValue != null)
             {
-                overviewStorageValue.Text = FormatPercent(data.StorageUsedPercent);
-                overviewStorageNote.Text = data.StorageUsedGiB.HasValue && data.StorageTotalGiB.HasValue
-                    ? FormatStorage(data.StorageUsedGiB.Value, data.StorageFreeGiB, data.StorageTotalGiB.Value)
-                    : "--";
+                overviewStorageValue.Text = FormatStorageVolumePercentages(data);
+                overviewStorageNote.Text = FormatStorageVolumeAvailability(data);
+            }
+            if (overviewStorageRing != null)
+            {
+                StorageVolumeSnapshot primary = PrimaryStorageVolume(data);
+                double? freePercent = null;
+                if (primary != null && primary.TotalGiB > 0)
+                    freePercent = Math.Max(0, Math.Min(100, primary.FreeGiB / primary.TotalGiB * 100.0));
+                overviewStorageRing.Set(freePercent, FormatPercent(freePercent), primary == null ? "可用空間" : primary.Name + " 可用");
             }
         }
 
@@ -1030,46 +1132,43 @@ namespace BatteryPulse
         {
             if (overviewChargeEtaValue != null)
             {
-                if (data.ChargeForecastState == "已充滿" || data.ChargeForecastState == "已達上限")
-                {
-                    overviewChargeEtaValue.Text = data.ChargeForecastState;
-                    overviewChargeEtaNote.Text = ForecastTargetLabel(data);
-                }
-                else if (data.ChargeForecastState == "供電不足")
-                {
-                    overviewChargeEtaValue.Text = "無法充電";
-                    overviewChargeEtaNote.Text = "外接電源下電池正在放電";
-                }
-                else if (data.ChargeEtaSeconds.HasValue && data.ChargeEtaSeconds.Value > 0)
-                {
-                    overviewChargeEtaValue.Text = "約 " + FormatDuration(TimeSpan.FromSeconds(data.ChargeEtaSeconds.Value));
-                    overviewChargeEtaNote.Text = ForecastTargetLabel(data) + " · 保守估算";
-                }
+                string target = ForecastTargetPercentText(data);
+                bool charging = data != null && data.IsCharging;
+                bool targetReached = charging && data.ChargeEtaSeconds.HasValue && data.ChargeEtaSeconds.Value <= 0;
+                targetReached = targetReached || (charging && (data.ChargeForecastState == "已充滿" || data.ChargeForecastState == "已達上限"));
+                bool hasChargeEstimate = charging && data.ChargeEtaSeconds.HasValue && data.ChargeEtaSeconds.Value > 0;
+                bool hasRuntime = data.RuntimeEtaSeconds.HasValue && data.RuntimeEtaSeconds.Value > 0;
+                string storedEnergy = CurrentEnergyText(data);
+                if (!charging)
+                    overviewChargeEtaValue.Text = hasRuntime ? "續航 約 " + FormatDuration(TimeSpan.FromSeconds(data.RuntimeEtaSeconds.Value)) : "--";
+                else if (targetReached)
+                    overviewChargeEtaValue.Text = "已達 " + target;
+                else if (hasChargeEstimate)
+                    overviewChargeEtaValue.Text = "至 " + target + " 約 " + FormatDuration(TimeSpan.FromSeconds(data.ChargeEtaSeconds.Value));
                 else
-                {
                     overviewChargeEtaValue.Text = "--";
-                    overviewChargeEtaNote.Text = data.ChargeForecastState == "未接電" ? "未接電" : "--";
-                }
+
+                if (charging)
+                    overviewChargeEtaNote.Text = hasRuntime
+                        ? "續航約 " + FormatDuration(TimeSpan.FromSeconds(data.RuntimeEtaSeconds.Value)) +
+                          (storedEnergy == "--" ? string.Empty : " · " + storedEnergy)
+                        : "續航 --";
+                else
+                    overviewChargeEtaNote.Text = storedEnergy == "--" ? "--" : storedEnergy;
             }
 
-            if (overviewRuntimeValue != null)
+        }
+
+        private static string CurrentEnergyText(BatterySnapshot data)
+        {
+            if (data != null && data.CurrentCapacityMwh.HasValue && data.CurrentCapacityMwh.Value > 0)
+                return FormatCapacity(data.CurrentCapacityMwh);
+            if (data != null && data.FullChargeCapacityMwh.HasValue && data.Percent.HasValue)
             {
-                if (data.RuntimeEtaSeconds.HasValue && data.RuntimeEtaSeconds.Value > 0)
-                {
-                    overviewRuntimeValue.Text = "約 " + FormatDuration(TimeSpan.FromSeconds(data.RuntimeEtaSeconds.Value));
-                    overviewRuntimeNote.Text = data.IsAcLine ? "拔電後保守估算" : "依目前耗電保守估算";
-                }
-                else if (data.IsAcLine && data.ChargeForecastState != "供電不足")
-                {
-                    overviewRuntimeValue.Text = "外接電源";
-                    overviewRuntimeNote.Text = "拔電後資料不足";
-                }
-                else
-                {
-                    overviewRuntimeValue.Text = "--";
-                    overviewRuntimeNote.Text = "--";
-                }
+                double estimatedMwh = data.FullChargeCapacityMwh.Value * Math.Max(0, Math.Min(100, data.Percent.Value)) / 100.0;
+                return "約 " + FormatCapacity(estimatedMwh);
             }
+            return "--";
         }
 
         private void UpdatePowerSafe(BatterySnapshot data)
@@ -1080,15 +1179,6 @@ namespace BatteryPulse
             double? chargeWatts = data.IsCharging && data.Watts.HasValue && data.Watts.Value > 0
                 ? data.Watts
                 : (double?)null;
-            double? estimatedLoad = computerWatts;
-            if (computerWatts.HasValue && chargeWatts.HasValue)
-                estimatedLoad = computerWatts.Value + chargeWatts.Value;
-
-            double? ratedWatts = KnownAdapterWatts(data);
-            string source = PowerSourceLabel(data);
-            string sourceNote = data.IsAcLine
-                ? (source == "--" ? "外接電源已連接 · 類型未取得" : "外接電源已連接")
-                : "電池供電中";
             bool supplement = data.IsAcLine && data.Watts.HasValue && data.Watts.Value > 1 &&
                 string.Equals(data.BatteryPowerMode, "放電", StringComparison.OrdinalIgnoreCase);
 
@@ -1104,88 +1194,126 @@ namespace BatteryPulse
                 status = "電池仍在放電";
                 note = "外接電源下仍由電池補足負載";
             }
-            else if (ratedWatts.HasValue && estimatedLoad.HasValue)
+            else if (data.IsCharging)
             {
-                double ratio = estimatedLoad.Value / ratedWatts.Value;
-                if (ratio <= 0.75)
-                {
-                    status = "供電充足";
-                    note = "額定 " + ratedWatts.Value.ToString("0", CultureInfo.InvariantCulture) + " W";
-                }
-                else if (ratio <= 0.92)
-                {
-                    status = "接近額定功率";
-                    note = "高負載時充電速度可能下降";
-                }
-                else
-                {
-                    status = "接近或超過額定功率";
-                    note = "請確認供電器與負載";
-                }
+                status = "充電中";
+                note = "外接電源正在補充電池";
             }
             else
             {
-                status = "供電來源已連接";
-                note = "未取得充電器額定功率";
+                status = "外接電源";
+                note = "目前未偵測到電池充電流向";
             }
 
-            SetMetric("pd_status", source, status);
+            SetMetric("pd_status", status, note);
             SetMetric("pd_input", FormatValue(computerWatts, "0.0", " W"),
                 computerWatts.HasValue ? data.SystemWattsSource : "--");
 
-            string margin = ratedWatts.HasValue && estimatedLoad.HasValue
-                ? FormatSigned(ratedWatts.Value - estimatedLoad.Value, " W")
-                : "--";
-            string marginNote = ratedWatts.HasValue
-                ? "額定 " + ratedWatts.Value.ToString("0", CultureInfo.InvariantCulture) + " W"
-                : (data.ChargerType == "USB-PD"
-                    ? "協議功率未取得 · 參考值不納入計算"
-                    : "額定功率未取得");
-            SetMetric("pd_margin", margin, marginNote);
+            string chargerType = RecognizedChargerType(data);
+            string chargerTypeSource = chargerType == "--" ? "--" : TextOrUnknown(data.ChargerTypeSource);
+            SetMetric("pd_margin", chargerType, chargerTypeSource);
 
             string flow = data.Watts.HasValue && data.Watts.Value > 0
                 ? (string.IsNullOrEmpty(data.BatteryPowerMode) ? "電池" : data.BatteryPowerMode) + " " + data.Watts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W"
                 : "--";
-            SetMetric("battery_flow", flow, data.IsAcLine ? "外接電源中" : "電池供電中");
+            SetMetric("battery_flow", flow, data.IsAcLine ? "外接電源" : "電池供電");
 
             string detail = status + "\n" + note;
             if (computerWatts.HasValue)
                 detail += "\n電腦耗電 " + computerWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
             if (chargeWatts.HasValue)
                 detail += " · 電池吸收 " + chargeWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
-            detail += ratedWatts.HasValue
-                ? "\n額定功率 " + ratedWatts.Value.ToString("0", CultureInfo.InvariantCulture) + " W"
-                : "\n額定功率 --";
-            if (data.ChargerType == "USB-PD" && !ratedWatts.HasValue)
-                detail += "\nUSB-PD 參考值 " + settings.PdWatts.ToString("0", CultureInfo.InvariantCulture) + " W，未視為實際功率";
+            if (chargerType != "--")
+                detail += "\n充電器 " + chargerType;
             pdDetailText.Text = detail;
 
-            string chargerSource = string.IsNullOrWhiteSpace(data.AdapterPowerSource)
-                ? data.ChargerTypeSource
-                : data.AdapterPowerSource;
-            if (string.IsNullOrWhiteSpace(chargerSource) || chargerSource == "尚未取得來源") chargerSource = "--";
-            powerSourceText.Text = "供電來源：" + source + " · " + chargerSource + "\n" +
-                "電腦耗電：" + (computerWatts.HasValue ? data.SystemWattsSource : "--") + "\n" +
+            powerSourceText.Text = "電腦耗電：" + (computerWatts.HasValue ? data.SystemWattsSource : "--") + "\n" +
                 "電池流向：Windows BatteryStatus / ChargeRate\n" +
-                "額定功率：" + (ratedWatts.HasValue ? "硬體回報" : "--，未取得");
+                "充電瓦數：Windows BatteryStatus / ChargeRate" +
+                (chargerType == "--" ? "\n充電器類型：--" : "\n充電器類型：" + chargerType + " · " + chargerTypeSource);
         }
 
-        private static string PowerSourceLabel(BatterySnapshot data)
+        private void UpdateEnergyRanking(BatterySnapshot data)
         {
-            if (data == null || !data.IsAcLine) return "電池";
+            if (energyRankingList == null || energyRankingSource == null) return;
+            energyRankingList.Children.Clear();
+
+            if (data == null || data.EnergyRanking == null || data.EnergyRanking.Count == 0)
+            {
+                energyRankingList.Children.Add(new TextBlock
+                {
+                    Text = "--",
+                    Foreground = B("#FF6D757D"),
+                    FontSize = 11,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                });
+                energyRankingSource.Text = string.IsNullOrWhiteSpace(data == null ? null : data.EnergyRankingSource)
+                    ? "等待足夠的程序 CPU 取樣"
+                    : data.EnergyRankingSource;
+                return;
+            }
+
+            int rank = 1;
+            foreach (EnergyProcessSnapshot item in data.EnergyRanking)
+            {
+                string percentage = Math.Max(0, item.SharePercent).ToString("0", CultureInfo.InvariantCulture) + "%";
+                if (item.EstimatedWatts.HasValue)
+                    percentage += " · 約 " + item.EstimatedWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
+                energyRankingList.Children.Add(EnergyRankingRow(rank, item.Name, percentage));
+                rank++;
+            }
+            energyRankingSource.Text = "比例依程序 CPU 時間估算；瓦數依系統耗電分配，每 5 秒更新";
+        }
+
+        private static Border EnergyRankingRow(int rank, string processName, string value)
+        {
+            var row = new Grid { MinHeight = 28 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(30) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+            row.Children.Add(new TextBlock
+            {
+                Text = "#" + rank.ToString(CultureInfo.InvariantCulture),
+                Foreground = B("#FF8A959D"),
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            var name = new TextBlock
+            {
+                Text = string.IsNullOrWhiteSpace(processName) ? "未知程序" : processName,
+                Foreground = B("#FF39434A"),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetColumn(name, 1);
+            row.Children.Add(name);
+            var ratio = new TextBlock
+            {
+                Text = value,
+                Foreground = B("#FF39434A"),
+                FontSize = 10.5,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetColumn(ratio, 2);
+            row.Children.Add(ratio);
+
+            return new Border
+            {
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                BorderBrush = B("#17FFFFFF"),
+                Child = row
+            };
+        }
+
+        private static string RecognizedChargerType(BatterySnapshot data)
+        {
+            if (data == null || !data.IsAcLine) return "--";
             if (string.Equals(data.ChargerType, "USB-PD", StringComparison.OrdinalIgnoreCase)) return "USB-PD";
             if (string.Equals(data.ChargerType, "原廠充電器", StringComparison.OrdinalIgnoreCase)) return "原廠 AC";
             return "--";
-        }
-
-        private static double? KnownAdapterWatts(BatterySnapshot data)
-        {
-            if (data == null) return null;
-            if (data.AdapterRatedWatts.HasValue && data.AdapterRatedWatts.Value > 0)
-                return data.AdapterRatedWatts.Value;
-            if (data.PdNegotiatedWatts.HasValue && data.PdNegotiatedWatts.Value > 0)
-                return data.PdNegotiatedWatts.Value;
-            return null;
         }
 
         private void UpdateBattery(BatterySnapshot data)
@@ -1193,20 +1321,18 @@ namespace BatteryPulse
             double? health = null;
             if (data.DesignCapacityMwh.HasValue && data.FullChargeCapacityMwh.HasValue && data.DesignCapacityMwh.Value > 0)
                 health = data.FullChargeCapacityMwh.Value / data.DesignCapacityMwh.Value * 100.0;
-            if (overviewBatteryValue != null)
-            {
-                overviewBatteryValue.Text = FormatPercent(health);
-                overviewBatteryNote.Text = health.HasValue ? BatteryHealthState(health.Value) : "健康度未取得";
-            }
             SetMetric("battery_health", FormatPercent(health), health.HasValue ? BatteryHealthState(health.Value) : "硬體未提供完整容量");
-            SetMetric("full_capacity", FormatCapacity(data.FullChargeCapacityMwh), "Windows WMI 回報");
+            SetMetric("current_capacity", FormatCapacity(data.CurrentCapacityMwh), TextOrUnknown(data.CurrentCapacitySource));
             SetMetric("design_capacity", FormatCapacity(data.DesignCapacityMwh), "原廠設計值");
             SetMetric("cycles", data.CycleCount.HasValue ? data.CycleCount.Value.ToString("0", CultureInfo.InvariantCulture) + " 次" : "--", data.CycleCount.HasValue ? "Windows WMI 回報" : "硬體未提供");
 
             UpdateBatteryStatusVisual(data, health);
 
-            batteryIdentityText.Text = "名稱：" + TextOrUnknown(data.BatteryName) + "\n製造商：" + TextOrUnknown(data.BatteryManufacturer) + "\n電壓：" + (data.VoltageMv.HasValue ? (data.VoltageMv.Value / 1000.0).ToString("0.00", CultureInfo.InvariantCulture) + " V" : "硬體未提供");
-            batteryRuntimeText.Text = RuntimeEstimate(data);
+            if (batteryIdentityText != null)
+                batteryIdentityText.Text = "名稱：" + TextOrUnknown(data.BatteryName) + "\n製造商：" + TextOrUnknown(data.BatteryManufacturer) + "\n目前容量：" + FormatCapacity(data.CurrentCapacityMwh) + "\n滿充容量：" + FormatCapacity(data.FullChargeCapacityMwh) + "\n電壓：" + (data.VoltageMv.HasValue ? (data.VoltageMv.Value / 1000.0).ToString("0.00", CultureInfo.InvariantCulture) + " V" : "硬體未提供");
+            if (batteryRuntimeText != null)
+                batteryRuntimeText.Text = RuntimeEstimate(data);
+
         }
 
         private void UpdateBatteryStatusVisual(BatterySnapshot data, double? health)
@@ -1255,7 +1381,8 @@ namespace BatteryPulse
             bool acpi = cpuSource.IndexOf("ACPI", StringComparison.OrdinalIgnoreCase) >= 0;
             string cpuAccuracy = acpi ? "ACPI 可能是系統熱區，僅供趨勢參考" : "處理器感測器讀值";
             string gpuSource = string.IsNullOrWhiteSpace(data.GpuTempSource) ? "沒有核心溫度；目前狀態為「" + data.GpuStatus + "」" : data.GpuTempSource;
-            temperatureSourceText.Text = "CPU：" + cpuSource + "\n" + cpuAccuracy + "\n\nNVIDIA：" + gpuSource + "\n獨顯待機或重新啟用時，每 60 秒自動重新掃描感測器。";
+            string storageSource = string.IsNullOrWhiteSpace(data.StorageTempSource) ? "沒有可用儲存裝置感測器" : data.StorageTempSource;
+            temperatureSourceText.Text = "CPU：" + cpuSource + "\n" + cpuAccuracy + "\n\nGPU：" + gpuSource + "\n\n儲存裝置：" + storageSource + "\n獨顯或儲存裝置待機時，硬體可能暫時不回報溫度。";
         }
 
         private void UpdateAlerts(BatterySnapshot data, IList<TelemetryPoint> points)
@@ -1443,19 +1570,27 @@ namespace BatteryPulse
         private void RefreshTopBarItemsPanel()
         {
             if (topBarItemsPanel == null) return;
+            topBarItemsPanel.AllowDrop = true;
+            topBarItemsPanel.DragOver -= TopBarItemsDragOver;
+            topBarItemsPanel.Drop -= TopBarItemsDrop;
+            topBarItemsPanel.DragOver += TopBarItemsDragOver;
+            topBarItemsPanel.Drop += TopBarItemsDrop;
             topBarItemsPanel.Children.Clear();
-            foreach (string id in settings.GetTopBarItems())
+            topBarDropGuide = null;
+            List<string> items = settings.GetTopBarItems();
+            for (int index = 0; index < items.Count; index++)
             {
-                string itemId = id;
+                string itemId = items[index];
                 var row = new Grid
                 {
                     Height = 42,
                     Margin = new Thickness(0, 0, 0, 5),
-                    Background = B("#10FFFFFF")
+                    Background = B("#10FFFFFF"),
+                    Cursor = Cursors.SizeAll
                 };
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
 
                 row.Children.Add(new TextBlock
                 {
@@ -1475,37 +1610,149 @@ namespace BatteryPulse
                 Grid.SetColumn(toggle.Root, 1);
                 row.Children.Add(toggle.Root);
 
-                var order = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(9, 0, 8, 0) };
-                Border up = ActionButton("↑", delegate { MoveTopBarItem(itemId, -1); });
-                Border down = ActionButton("↓", delegate { MoveTopBarItem(itemId, 1); });
-                up.Width = 28;
-                down.Width = 28;
-                up.Margin = new Thickness(0, 0, 4, 0);
-                order.Children.Add(up);
-                order.Children.Add(down);
-                Grid.SetColumn(order, 2);
-                row.Children.Add(order);
-                topBarItemsPanel.Children.Add(new Border
+                var dragHint = new TextBlock
+                {
+                    Text = "拖曳",
+                    Foreground = B("#FF8A959D"),
+                    FontSize = 9,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(dragHint, 2);
+                row.Children.Add(dragHint);
+
+                var item = new Border
                 {
                     CornerRadius = new CornerRadius(6),
                     BorderThickness = new Thickness(1),
                     BorderBrush = B("#16FFFFFF"),
+                    AllowDrop = true,
+                    Tag = index,
+                    Cursor = Cursors.SizeAll,
                     Child = row
-                });
+                };
+                item.PreviewMouseLeftButtonDown += TopBarItemMouseDown;
+                item.PreviewMouseMove += TopBarItemMouseMove;
+                item.DragOver += TopBarItemsDragOver;
+                item.Drop += TopBarItemsDrop;
+                topBarItemsPanel.Children.Add(item);
             }
         }
 
-        private void MoveTopBarItem(string id, int direction)
+        private void TopBarItemMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            Border item = sender as Border;
+            if (item == null || topBarItemsPanel == null) return;
+            topBarDragIndex = topBarItemsPanel.Children.IndexOf(item);
+            topBarDragStart = e.GetPosition(topBarItemsPanel);
+        }
+
+        private void TopBarItemMouseMove(object sender, MouseEventArgs e)
+        {
+            if (e.LeftButton != MouseButtonState.Pressed || topBarDragIndex < 0 || topBarItemsPanel == null) return;
+            Point current = e.GetPosition(topBarItemsPanel);
+            if (Math.Abs(current.X - topBarDragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+                Math.Abs(current.Y - topBarDragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
+
+            Border item = sender as Border;
+            if (item == null) return;
+            try
+            {
+                DragDrop.DoDragDrop(item, topBarDragIndex, DragDropEffects.Move);
+            }
+            finally
+            {
+                ClearTopBarDropGuide();
+                topBarDragIndex = -1;
+            }
+        }
+
+        private void TopBarItemsDragOver(object sender, DragEventArgs e)
+        {
+            if (!e.Data.GetDataPresent(typeof(int)) || topBarItemsPanel == null)
+            {
+                e.Effects = DragDropEffects.None;
+                return;
+            }
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+            UpdateTopBarDropGuide(e.GetPosition(topBarItemsPanel).Y);
+        }
+
+        private void TopBarItemsDrop(object sender, DragEventArgs e)
+        {
+            if (!e.Data.GetDataPresent(typeof(int)) || topBarItemsPanel == null) return;
+            int source = (int)e.Data.GetData(typeof(int));
+            int target = topBarDropGuide != null && topBarDropGuide.Tag is int
+                ? (int)topBarDropGuide.Tag
+                : GetTopBarDropIndex(e.GetPosition(topBarItemsPanel).Y);
+            MoveTopBarItem(source, target);
+            e.Handled = true;
+        }
+
+        private void UpdateTopBarDropGuide(double y)
+        {
+            if (topBarItemsPanel == null) return;
+            int target = GetTopBarDropIndex(y);
+            if (topBarDropGuide == null)
+            {
+                topBarDropGuide = new Border
+                {
+                    Height = 2,
+                    Margin = new Thickness(0, 0, 0, 3),
+                    Background = B("#FF7B858D"),
+                    CornerRadius = new CornerRadius(1),
+                    IsHitTestVisible = false
+                };
+            }
+            topBarItemsPanel.Children.Remove(topBarDropGuide);
+            topBarDropGuide.Tag = target;
+            topBarItemsPanel.Children.Insert(Math.Max(0, Math.Min(target, topBarItemsPanel.Children.Count)), topBarDropGuide);
+        }
+
+        private int GetTopBarDropIndex(double y)
+        {
+            if (topBarItemsPanel == null) return 0;
+            int target = 0;
+            foreach (UIElement element in topBarItemsPanel.Children)
+            {
+                if (element == topBarDropGuide) continue;
+                FrameworkElement row = element as FrameworkElement;
+                if (row == null) continue;
+                Point center = row.TranslatePoint(new Point(0, row.ActualHeight / 2.0), topBarItemsPanel);
+                if (y < center.Y) break;
+                target++;
+            }
+            return target;
+        }
+
+        private void ClearTopBarDropGuide()
+        {
+            if (topBarItemsPanel != null && topBarDropGuide != null)
+                topBarItemsPanel.Children.Remove(topBarDropGuide);
+            topBarDropGuide = null;
+        }
+
+        private void MoveTopBarItem(int source, int target)
         {
             List<string> items = settings.GetTopBarItems();
-            int index = items.IndexOf(id);
-            int next = index + direction;
-            if (index < 0 || next < 0 || next >= items.Count) return;
-            string moved = items[index];
-            items[index] = items[next];
-            items[next] = moved;
+            if (source < 0 || source >= items.Count) return;
+            target = Math.Max(0, Math.Min(items.Count, target));
+            if (target == source || target == source + 1)
+            {
+                if (topBarOrderStatus != null)
+                    topBarOrderStatus.Text = "順序未變更";
+                return;
+            }
+            string moved = items[source];
+            items.RemoveAt(source);
+            if (target > source) target--;
+            target = Math.Max(0, Math.Min(items.Count, target));
+            items.Insert(target, moved);
             settings.TopBarItems = string.Join(",", items);
             settings.Save();
+            if (topBarOrderStatus != null)
+                topBarOrderStatus.Text = "已放置「" + AppSettings.TopBarItemLabel(moved) + "」為第 " + (target + 1).ToString(CultureInfo.InvariantCulture) + " 項；頂端列已更新";
             RefreshTopBarItemsPanel();
         }
 
@@ -1560,62 +1807,225 @@ namespace BatteryPulse
             return root;
         }
 
-        private Border BuildOverviewLimitTile()
+        private Border OverviewStatusPowerTile()
         {
-            var panel = new StackPanel();
-            var heading = new StackPanel { Orientation = Orientation.Horizontal };
+            var content = new Grid();
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            overviewBatteryRing = new RingMetricVisual
+            {
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            content.Children.Add(overviewBatteryRing);
+
+            var panel = new Grid
+            {
+                Margin = new Thickness(4, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+            for (int i = 0; i < 3; i++)
+                panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            var heading = OverviewHeading("目前狀態", "#FF9AA5AD");
+            Grid.SetRow(heading, 0);
+            panel.Children.Add(heading);
+
+            overviewStateValue = OverviewValueText();
+            Grid.SetRow(overviewStateValue, 1);
+            panel.Children.Add(overviewStateValue);
+
+            overviewStateNote = OverviewNoteText();
+            Grid.SetRow(overviewStateNote, 2);
+            panel.Children.Add(overviewStateNote);
+
+            Grid.SetColumn(panel, 1);
+            content.Children.Add(panel);
+            return OverviewCard(content);
+        }
+
+        private Border OverviewPowerTile()
+        {
+            var content = new Grid { VerticalAlignment = VerticalAlignment.Stretch };
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            for (int i = 0; i < 3; i++)
+                content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            var systemHeading = OverviewHeading("電腦耗電", "#FF9AA5AD");
+            content.Children.Add(systemHeading);
+            var chargeHeading = OverviewHeading("電池吸收", "#FF9AA5AD");
+            Grid.SetColumn(chargeHeading, 1);
+            content.Children.Add(chargeHeading);
+
+            overviewSystemValue = OverviewValueText();
+            Grid.SetRow(overviewSystemValue, 1);
+            content.Children.Add(overviewSystemValue);
+            overviewChargeValue = OverviewValueText();
+            Grid.SetColumn(overviewChargeValue, 1);
+            Grid.SetRow(overviewChargeValue, 1);
+            content.Children.Add(overviewChargeValue);
+
+            overviewSystemNote = OverviewNoteText();
+            Grid.SetRow(overviewSystemNote, 2);
+            content.Children.Add(overviewSystemNote);
+            overviewChargeNote = OverviewNoteText();
+            Grid.SetColumn(overviewChargeNote, 1);
+            Grid.SetRow(overviewChargeNote, 2);
+            content.Children.Add(overviewChargeNote);
+
+            return OverviewCard(content);
+        }
+
+        private static StackPanel OverviewHeading(string title, string accent)
+        {
+            var heading = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
             heading.Children.Add(new Border
             {
                 Width = 5,
                 Height = 5,
                 CornerRadius = new CornerRadius(3),
-                Background = B("#FF8AC7A8"),
-                Margin = new Thickness(0, 5, 8, 0),
-                VerticalAlignment = VerticalAlignment.Top
+                Background = B(accent),
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center
             });
             heading.Children.Add(new TextBlock
             {
-                Text = "充電上限",
+                Text = title,
                 Foreground = B("#FF6D757D"),
                 FontSize = 10.5,
-                FontWeight = FontWeights.SemiBold
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
             });
-            panel.Children.Add(heading);
+            return heading;
+        }
 
-            overviewLimitValue = new TextBlock
+        private static TextBlock OverviewValueText()
+        {
+            return new TextBlock
             {
                 Text = "--",
                 Foreground = B("#FF252A2F"),
                 FontSize = 20,
                 FontWeight = FontWeights.Light,
-                Margin = new Thickness(0, 10, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextWrapping = TextWrapping.NoWrap,
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
-            panel.Children.Add(overviewLimitValue);
+        }
 
-            overviewLimitNote = new TextBlock
+        private static TextBlock OverviewNoteText()
+        {
+            return new TextBlock
             {
                 Text = "--",
                 Foreground = B("#FF6D757D"),
                 FontSize = 9.5,
-                Margin = new Thickness(0, 6, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                TextWrapping = TextWrapping.NoWrap,
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
+        }
+
+        private static Border OverviewCard(UIElement content)
+        {
+            var root = new Border
+            {
+                Height = OverviewCardHeight,
+                Margin = new Thickness(0, 0, OverviewCardGap, OverviewCardGap),
+                Padding = new Thickness(16, 14, 16, 13),
+                CornerRadius = new CornerRadius(8),
+                BorderThickness = new Thickness(1),
+                BorderBrush = B("#2BFFFFFF"),
+                Background = B("#17FFFFFF"),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Child = content
+            };
+            AttachSoftHover(root);
+            return root;
+        }
+
+        private Border OverviewStorageTile()
+        {
+            var content = new Grid();
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            overviewStorageRing = new RingMetricVisual
+            {
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            content.Children.Add(overviewStorageRing);
+
+            var panel = OverviewMetricPanel("儲存空間", "#FF9AA5AD", out overviewStorageValue, out overviewStorageNote);
+
+            Grid.SetColumn(panel, 1);
+            content.Children.Add(panel);
+            return OverviewCard(content);
+        }
+
+        private Border OverviewMemoryTile()
+        {
+            var content = new Grid();
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            overviewMemoryRing = new RingMetricVisual
+            {
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            content.Children.Add(overviewMemoryRing);
+
+            var panel = OverviewMetricPanel("記憶體", "#FF9AA5AD", out overviewMemoryValue, out overviewMemoryNote);
+
+            Grid.SetColumn(panel, 1);
+            content.Children.Add(panel);
+            return OverviewCard(content);
+        }
+
+        private Border BuildOverviewLimitTile()
+        {
+            var panel = new Grid
+            {
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+            for (int i = 0; i < 4; i++)
+                panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            var heading = OverviewHeading("充電上限", "#FF9AA5AD");
+            Grid.SetRow(heading, 0);
+            panel.Children.Add(heading);
+
+            overviewLimitValue = OverviewValueText();
+            Grid.SetRow(overviewLimitValue, 1);
+            panel.Children.Add(overviewLimitValue);
+
+            overviewLimitNote = OverviewNoteText();
+            Grid.SetRow(overviewLimitNote, 2);
             panel.Children.Add(overviewLimitNote);
 
             overviewLimitOptions = new WrapPanel
             {
                 Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 10, 0, 0)
+                VerticalAlignment = VerticalAlignment.Center
             };
+            Grid.SetRow(overviewLimitOptions, 3);
             panel.Children.Add(overviewLimitOptions);
 
             overviewLimitCustomRow = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 9, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
                 Visibility = Visibility.Collapsed
             };
+            Grid.SetRow(overviewLimitCustomRow, 3);
             var customStepper = new NumericStepper(settings.BatteryLimitPercent, 40, 100, 1, "%");
             overviewLimitCustomRow.Children.Add(customStepper.Root);
             Border applyCustom = ActionButton("套用自訂", delegate
@@ -1628,85 +2038,98 @@ namespace BatteryPulse
 
             overviewLimitCard = new Border
             {
-                Width = 310,
-                Height = 104,
-                Margin = new Thickness(0, 0, 10, 10),
+                Height = 150,
+                Margin = new Thickness(0, 0, 12, 12),
                 Padding = new Thickness(16, 14, 16, 13),
                 CornerRadius = new CornerRadius(8),
                 BorderThickness = new Thickness(1),
                 BorderBrush = B("#2BFFFFFF"),
                 Background = B("#17FFFFFF"),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
                 Child = panel
             };
+            var hoverShadow = new DropShadowEffect
+            {
+                Color = Color.FromRgb(70, 80, 88),
+                BlurRadius = 12,
+                ShadowDepth = 0,
+                Opacity = 0.08
+            };
+            overviewLimitCard.Effect = hoverShadow;
             overviewLimitCard.MouseEnter += delegate
             {
-                if (!limitSuccessActive) overviewLimitCard.Background = B("#22FFFFFF");
+                if (!limitSuccessActive)
+                {
+                    overviewLimitCard.Background = B("#22FFFFFF");
+                    hoverShadow.BlurRadius = 16;
+                    hoverShadow.Opacity = 0.20;
+                }
             };
             overviewLimitCard.MouseLeave += delegate
             {
-                if (!limitSuccessActive) overviewLimitCard.Background = B("#17FFFFFF");
+                if (!limitSuccessActive)
+                {
+                    overviewLimitCard.Background = B("#17FFFFFF");
+                    hoverShadow.BlurRadius = 12;
+                    hoverShadow.Opacity = 0.08;
+                }
             };
             return overviewLimitCard;
         }
 
         private static Border OverviewSummaryTile(string title, string accent, out TextBlock value, out TextBlock note)
         {
-            var panel = new StackPanel();
-            var heading = new StackPanel { Orientation = Orientation.Horizontal };
-            heading.Children.Add(new Border
+            var panel = OverviewMetricPanel(title, accent, out value, out note);
+            return OverviewCard(panel);
+        }
+
+        private static Grid OverviewMetricPanel(string title, string accent, out TextBlock value, out TextBlock note)
+        {
+            var panel = new Grid
             {
-                Width = 5,
-                Height = 5,
-                CornerRadius = new CornerRadius(3),
-                Background = B(accent),
-                Margin = new Thickness(0, 5, 8, 0),
-                VerticalAlignment = VerticalAlignment.Top
-            });
-            heading.Children.Add(new TextBlock
-            {
-                Text = title,
-                Foreground = B("#FF6D757D"),
-                FontSize = 10.5,
-                FontWeight = FontWeights.SemiBold
-            });
+                VerticalAlignment = VerticalAlignment.Stretch
+            };
+            for (int i = 0; i < 3; i++)
+                panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            var heading = OverviewHeading(title, accent);
+            Grid.SetRow(heading, 0);
             panel.Children.Add(heading);
 
-            value = new TextBlock
-            {
-                Text = "--",
-                Foreground = B("#FF252A2F"),
-                FontSize = 20,
-                FontWeight = FontWeights.Light,
-                Margin = new Thickness(0, 10, 0, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis
-            };
+            value = OverviewValueText();
+            Grid.SetRow(value, 1);
             panel.Children.Add(value);
 
-            note = new TextBlock
-            {
-                Text = "尚未取得",
-                Foreground = B("#FF6D757D"),
-                FontSize = 9.5,
-                Margin = new Thickness(0, 6, 0, 0),
-                TextTrimming = TextTrimming.CharacterEllipsis
-            };
+            note = OverviewNoteText();
+            note.Text = "尚未取得";
+            Grid.SetRow(note, 2);
             panel.Children.Add(note);
+            return panel;
+        }
 
-            var root = new Border
+        private static DropShadowEffect AttachSoftHover(Border root)
+        {
+            var shadow = new DropShadowEffect
             {
-                Width = 220,
-                Height = 108,
-                Margin = new Thickness(0, 0, 10, 10),
-                Padding = new Thickness(16, 14, 16, 13),
-                CornerRadius = new CornerRadius(8),
-                BorderThickness = new Thickness(1),
-                BorderBrush = B("#2BFFFFFF"),
-                Background = B("#17FFFFFF"),
-                Child = panel
+                Color = Color.FromRgb(70, 80, 88),
+                BlurRadius = 12,
+                ShadowDepth = 0,
+                Opacity = 0.08
             };
-            root.MouseEnter += delegate { root.Background = B("#22FFFFFF"); };
-            root.MouseLeave += delegate { root.Background = B("#17FFFFFF"); };
-            return root;
+            root.Effect = shadow;
+            root.MouseEnter += delegate
+            {
+                root.Background = B("#22FFFFFF");
+                shadow.BlurRadius = 16;
+                shadow.Opacity = 0.20;
+            };
+            root.MouseLeave += delegate
+            {
+                root.Background = B("#17FFFFFF");
+                shadow.BlurRadius = 12;
+                shadow.Opacity = 0.08;
+            };
+            return shadow;
         }
 
         private void RegisterMetric(string key, MetricView view)
@@ -1868,15 +2291,19 @@ namespace BatteryPulse
             panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
             panel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             var legend = new StackPanel { Orientation = Orientation.Horizontal };
-            if (showFullLegend || chart.Mode == TelemetryChartMode.Power)
+            if (showFullLegend || chart.Mode == TelemetryChartMode.Power || chart.Mode == TelemetryChartMode.PowerAndBattery)
             {
-                legend.Children.Add(Legend("電腦耗電", "#FF475569", DashStyles.Solid));
-                legend.Children.Add(Legend("電池功率", "#FFD97706", DashStyles.Solid));
+                legend.Children.Add(Legend("電腦耗電 (W)", "#FF41556B", DashStyles.Solid));
+                legend.Children.Add(Legend("電池充放電功率 (W)", "#FFD97706", DashStyles.Solid));
             }
             if (showFullLegend || chart.Mode == TelemetryChartMode.Temperature)
             {
-                legend.Children.Add(Legend("CPU", "#FF0878B9", DashStyles.Dash));
-                legend.Children.Add(Legend("NVIDIA", "#FF7C3AED", DashStyles.Dot));
+                legend.Children.Add(Legend("CPU (°C)", "#FF0878B9", DashStyles.Dash));
+                legend.Children.Add(Legend("GPU (°C)", "#FF7C3AED", DashStyles.Dot));
+            }
+            if (showFullLegend || chart.Mode == TelemetryChartMode.PowerAndBattery)
+            {
+                legend.Children.Add(Legend("電池電量 (%)", "#FF0F766E", DashStyles.DashDot));
             }
             panel.Children.Add(legend);
             Grid.SetRow(chart, 1);
@@ -2076,7 +2503,7 @@ namespace BatteryPulse
         private static string RuntimeEstimate(BatterySnapshot data)
         {
             if (data.RuntimeEtaSeconds.HasValue && data.RuntimeEtaSeconds.Value > 0)
-                return (data.IsAcLine ? "拔電後保守估算剩餘 " : "保守估算剩餘 ") + FormatDuration(TimeSpan.FromSeconds(data.RuntimeEtaSeconds.Value)) + "。\n依最近一段時間的淨耗電與電池容量估算。";
+                return "續航約 " + FormatDuration(TimeSpan.FromSeconds(data.RuntimeEtaSeconds.Value)) + "。\n依最近一段時間的淨耗電與電池容量估算。";
             if (data.ChargeForecastState == "供電不足")
                 return "目前無法估算充滿時間。\n外接電源下電池正在放電。";
             if (data.ChargeEtaSeconds.HasValue && data.ChargeEtaSeconds.Value > 0)
@@ -2100,6 +2527,13 @@ namespace BatteryPulse
             if (data != null && data.ChargeLimitPercent.HasValue && data.ChargeLimitPercent.Value < 100)
                 return "充至 " + data.ChargeLimitPercent.Value.ToString("0", CultureInfo.InvariantCulture) + "%";
             return "充至 100%";
+        }
+
+        private static string ForecastTargetPercentText(BatterySnapshot data)
+        {
+            if (data != null && data.ChargeLimitPercent.HasValue && data.ChargeLimitPercent.Value < 100)
+                return data.ChargeLimitPercent.Value.ToString("0", CultureInfo.InvariantCulture) + "%";
+            return "100%";
         }
 
         private static string FormatPercent(double? value)
@@ -2134,6 +2568,25 @@ namespace BatteryPulse
             return values.Count == 0 ? "--" : string.Join(" · ", values);
         }
 
+        private static string GpuModelNote(BatterySnapshot data)
+        {
+            if (data == null || string.IsNullOrWhiteSpace(data.GpuName)) return string.Empty;
+            return " / " + ShortGpuName(data.GpuName);
+        }
+
+        private static string GpuMetricNote(BatterySnapshot data)
+        {
+            if (data == null || string.IsNullOrWhiteSpace(data.GpuName)) return "--";
+            return "\u4f7f\u7528\u4e2d / " + ShortGpuName(data.GpuName);
+        }
+
+        private static string ShortGpuName(string name)
+        {
+            string value = (name ?? string.Empty).Trim();
+            if (value.Length <= 34) return value;
+            return value.Substring(0, 31) + "...";
+        }
+
         private string TemperatureOverviewState(BatterySnapshot data)
         {
             bool hasCpu = data.CpuTempC.HasValue;
@@ -2162,6 +2615,46 @@ namespace BatteryPulse
         {
             string used = usedGiB.ToString("0.0", CultureInfo.InvariantCulture) + " / " + totalGiB.ToString("0.0", CultureInfo.InvariantCulture) + " GiB";
             return freeGiB.HasValue ? used + " · 可用 " + freeGiB.Value.ToString("0.0", CultureInfo.InvariantCulture) + " GiB" : used;
+        }
+
+        private static string FormatStorageVolumePercentages(BatterySnapshot data)
+        {
+            if (data == null || data.StorageVolumes == null || data.StorageVolumes.Count == 0)
+            {
+                if (data == null || !data.StorageUsedPercent.HasValue) return "--";
+                return "可用 " + Math.Max(0, Math.Min(100, 100.0 - data.StorageUsedPercent.Value)).ToString("0", CultureInfo.InvariantCulture) + "%";
+            }
+
+            return string.Join(" · ", data.StorageVolumes.Select(delegate(StorageVolumeSnapshot volume)
+            {
+                double freePercent = volume.TotalGiB > 0 ? volume.FreeGiB / volume.TotalGiB * 100.0 : 0;
+                return volume.Name + " 可用 " + Math.Max(0, Math.Min(100, freePercent)).ToString("0", CultureInfo.InvariantCulture) + "%";
+            }).ToArray());
+        }
+
+        private static string FormatStorageVolumeAvailability(BatterySnapshot data)
+        {
+            if (data == null || data.StorageVolumes == null || data.StorageVolumes.Count == 0)
+            {
+                return data != null && data.StorageUsedGiB.HasValue && data.StorageTotalGiB.HasValue
+                    ? FormatStorage(data.StorageUsedGiB.Value, data.StorageFreeGiB, data.StorageTotalGiB.Value)
+                    : "--";
+            }
+
+            return string.Join(" · ", data.StorageVolumes.Select(delegate(StorageVolumeSnapshot volume)
+            {
+                return volume.Name + " 可用 " + volume.FreeGiB.ToString("0.0", CultureInfo.InvariantCulture) + " / " + volume.TotalGiB.ToString("0.0", CultureInfo.InvariantCulture) + " GiB";
+            }).ToArray());
+        }
+
+        private static StorageVolumeSnapshot PrimaryStorageVolume(BatterySnapshot data)
+        {
+            if (data == null || data.StorageVolumes == null || data.StorageVolumes.Count == 0) return null;
+            string root = Path.GetPathRoot(Environment.SystemDirectory);
+            string primaryName = string.IsNullOrWhiteSpace(root) ? string.Empty : root.TrimEnd('\\');
+            foreach (StorageVolumeSnapshot volume in data.StorageVolumes)
+                if (string.Equals(volume.Name, primaryName, StringComparison.OrdinalIgnoreCase)) return volume;
+            return data.StorageVolumes[0];
         }
 
         private static string FormatValue(double? value, string format, string suffix)
@@ -2439,6 +2932,120 @@ namespace BatteryPulse
         }
     }
 
+    public sealed class RingMetricVisual : Grid
+    {
+        private readonly System.Windows.Shapes.Path progressPath;
+        private readonly TextBlock valueText;
+        private readonly TextBlock captionText;
+
+        public RingMetricVisual()
+        {
+            Width = 84;
+            Height = 120;
+            ClipToBounds = true;
+            HorizontalAlignment = HorizontalAlignment.Center;
+            VerticalAlignment = VerticalAlignment.Center;
+
+            // Keep the ring, percentage, and caption in fixed rows so text never
+            // reflows back into the ring when a drive or memory label changes.
+            RowDefinitions.Add(new RowDefinition { Height = new GridLength(84) });
+            RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });
+            RowDefinitions.Add(new RowDefinition { Height = new GridLength(16) });
+
+            var track = new System.Windows.Shapes.Ellipse
+            {
+                Width = 58,
+                Height = 58,
+                Stroke = DashboardTheme.Brush("#3A7D8991"),
+                StrokeThickness = 4,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetRow(track, 0);
+            Children.Add(track);
+
+            progressPath = new System.Windows.Shapes.Path
+            {
+                Width = 84,
+                Height = 84,
+                Stretch = Stretch.None,
+                Stroke = DashboardTheme.Brush("#FF7D8B93"),
+                StrokeThickness = 4,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetRow(progressPath, 0);
+            Children.Add(progressPath);
+
+            valueText = new TextBlock
+            {
+                Text = "--",
+                Width = 84,
+                Height = 20,
+                Foreground = DashboardTheme.Brush("#FF39434A"),
+                FontSize = 13,
+                FontWeight = FontWeights.Light,
+                TextAlignment = TextAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetRow(valueText, 1);
+            Children.Add(valueText);
+
+            captionText = new TextBlock
+            {
+                Text = "--",
+                Width = 84,
+                Height = 16,
+                Foreground = DashboardTheme.Brush("#FF6D757D"),
+                FontSize = 7.5,
+                TextAlignment = TextAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetRow(captionText, 2);
+            Children.Add(captionText);
+        }
+
+        public void Set(double? percent, string value, string caption)
+        {
+            valueText.Text = string.IsNullOrWhiteSpace(value) ? "--" : value;
+            captionText.Text = string.IsNullOrWhiteSpace(caption) ? "--" : caption;
+            progressPath.Data = percent.HasValue ? BuildArc(percent.Value) : null;
+        }
+
+        private static Geometry BuildArc(double percent)
+        {
+            double clamped = Math.Max(0, Math.Min(100, percent));
+            if (clamped <= 0) return null;
+            clamped = Math.Min(99.95, clamped);
+            const double center = 42;
+            const double radius = 27;
+            double sweep = 360.0 * clamped / 100.0;
+            Point start = PointOnCircle(center, center, radius, -90);
+            Point end = PointOnCircle(center, center, radius, -90 + sweep);
+            var geometry = new StreamGeometry();
+            using (StreamGeometryContext context = geometry.Open())
+            {
+                context.BeginFigure(start, false, false);
+                context.ArcTo(end, new Size(radius, radius), 0, sweep > 180, SweepDirection.Clockwise, true, true);
+            }
+            geometry.Freeze();
+            return geometry;
+        }
+
+        private static Point PointOnCircle(double centerX, double centerY, double radius, double degrees)
+        {
+            double radians = degrees * Math.PI / 180.0;
+            return new Point(
+                centerX + radius * Math.Cos(radians),
+                centerY + radius * Math.Sin(radians));
+        }
+    }
+
     public sealed class ToggleSwitch
     {
         public Border Root { get; private set; }
@@ -2466,6 +3073,24 @@ namespace BatteryPulse
                 Focusable = true,
                 Cursor = Cursors.Hand,
                 Child = thumb
+            };
+            var hoverShadow = new DropShadowEffect
+            {
+                Color = Color.FromRgb(70, 80, 88),
+                BlurRadius = 8,
+                ShadowDepth = 0,
+                Opacity = 0.06
+            };
+            Root.Effect = hoverShadow;
+            Root.MouseEnter += delegate
+            {
+                hoverShadow.BlurRadius = 12;
+                hoverShadow.Opacity = 0.16;
+            };
+            Root.MouseLeave += delegate
+            {
+                hoverShadow.BlurRadius = 8;
+                hoverShadow.Opacity = 0.06;
             };
             Root.MouseLeftButtonUp += delegate { SetState(!isOn, true); };
             Root.GotKeyboardFocus += delegate { Root.BorderBrush = DashboardTheme.Brush("#BFFFFFFF"); };
@@ -2562,7 +3187,7 @@ namespace BatteryPulse
         }
     }
 
-    public enum TelemetryChartMode { All, Power, Temperature }
+    public enum TelemetryChartMode { All, Power, PowerAndBattery, Temperature }
 
     public sealed class TelemetryChart : FrameworkElement
     {
@@ -2585,8 +3210,8 @@ namespace BatteryPulse
         protected override void OnRender(DrawingContext dc)
         {
             base.OnRender(dc);
-            Rect plot = new Rect(42, 8, Math.Max(1, ActualWidth - 56), Math.Max(1, ActualHeight - 34));
-            Pen gridPen = new Pen(B("#1FFFFFFF"), 1);
+            Rect plot = new Rect(54, 22, Math.Max(1, ActualWidth - 68), Math.Max(1, ActualHeight - 52));
+            Pen gridPen = new Pen(B("#4A9AA4AC"), 1);
             for (int i = 0; i <= 4; i++)
             {
                 double y = plot.Top + plot.Height * i / 4.0;
@@ -2617,9 +3242,9 @@ namespace BatteryPulse
             maxPower = Math.Ceiling(maxPower / 20.0) * 20.0;
 
             dc.PushClip(new RectangleGeometry(plot));
-            if (Mode == TelemetryChartMode.All || Mode == TelemetryChartMode.Power)
+            if (Mode == TelemetryChartMode.All || Mode == TelemetryChartMode.Power || Mode == TelemetryChartMode.PowerAndBattery)
             {
-                DrawSeries(dc, visible, start, end, plot, delegate(TelemetryPoint p) { return p.SystemWatts; }, 0, maxPower, "#FF475569", 2.4, DashStyles.Solid);
+                DrawSeries(dc, visible, start, end, plot, delegate(TelemetryPoint p) { return p.SystemWatts; }, 0, maxPower, "#FF41556B", 2.4, DashStyles.Solid);
                 DrawSeries(dc, visible, start, end, plot, delegate(TelemetryPoint p) { return p.BatteryWatts; }, 0, maxPower, "#FFD97706", 2.4, DashStyles.Solid);
             }
             if (Mode == TelemetryChartMode.All || Mode == TelemetryChartMode.Temperature)
@@ -2627,10 +3252,29 @@ namespace BatteryPulse
                 DrawSeries(dc, visible, start, end, plot, delegate(TelemetryPoint p) { return p.CpuTempC; }, 20, 100, "#FF0878B9", 2.2, DashStyles.Dash);
                 DrawSeries(dc, visible, start, end, plot, delegate(TelemetryPoint p) { return p.GpuTempC; }, 20, 100, "#FF7C3AED", 2.2, DashStyles.Dot);
             }
+            if (Mode == TelemetryChartMode.All || Mode == TelemetryChartMode.PowerAndBattery)
+            {
+                DrawSeries(dc, visible, start, end, plot, delegate(TelemetryPoint p) { return p.BatteryPercent; }, 0, 100, "#FF0F766E", 2.2, DashStyles.DashDot);
+            }
             dc.Pop();
 
-            DrawText(dc, Mode == TelemetryChartMode.Temperature ? "100°C" : maxPower.ToString("0", CultureInfo.InvariantCulture), new Point(2, plot.Top - 2), 9, B("#FFC1CEC8"));
-            DrawText(dc, Mode == TelemetryChartMode.Temperature ? "20°C" : "0", new Point(14, plot.Bottom - 10), 9, B("#FFC1CEC8"));
+            string topLabel = Mode == TelemetryChartMode.Temperature
+                ? "100 °C"
+                : (Mode == TelemetryChartMode.Power || Mode == TelemetryChartMode.PowerAndBattery
+                    ? maxPower.ToString("0", CultureInfo.InvariantCulture) + " W"
+                    : maxPower.ToString("0", CultureInfo.InvariantCulture) + " W / 100%");
+            string bottomLabel = Mode == TelemetryChartMode.Temperature
+                ? "20 °C"
+                : ((Mode == TelemetryChartMode.Power || Mode == TelemetryChartMode.PowerAndBattery) ? "0 W" : "0 W / 0%");
+            DrawText(dc, topLabel, new Point(2, plot.Top - 15), 8.5, B("#FF6D757D"));
+            DrawText(dc, bottomLabel, new Point(2, plot.Bottom - 8), 8.5, B("#FF6D757D"));
+            if (Mode == TelemetryChartMode.PowerAndBattery)
+            {
+                DrawText(dc, "100%", new Point(plot.Right - 30, plot.Top - 15), 8.5, B("#FF0F766E"));
+                DrawText(dc, "0%", new Point(plot.Right - 18, plot.Bottom - 8), 8.5, B("#FF0F766E"));
+            }
+            if (Mode == TelemetryChartMode.All)
+                DrawText(dc, "溫度曲線：20–100 °C", new Point(plot.Right - 106, plot.Top - 15), 8.5, B("#FF6D757D"));
             DrawTimeLabels(dc, plot);
         }
 

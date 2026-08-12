@@ -1,5 +1,8 @@
 using System;
+using System.Diagnostics;
 using System.IO;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace BatteryPulse
@@ -43,6 +46,16 @@ namespace BatteryPulse
 
         private long? previousIdle;
         private long? previousTotal;
+        private DateTime lastProcessEnergyRead = DateTime.MinValue;
+        private readonly Dictionary<int, ProcessCpuSample> previousProcesses = new Dictionary<int, ProcessCpuSample>();
+        private List<EnergyProcessSnapshot> lastEnergyRanking = new List<EnergyProcessSnapshot>();
+        private string lastEnergyRankingSource = "尚未取得足夠樣本";
+
+        private sealed class ProcessCpuSample
+        {
+            public string Name;
+            public long CpuTicks;
+        }
 
         public void Read(BatterySnapshot data)
         {
@@ -50,6 +63,7 @@ namespace BatteryPulse
             ReadMemory(data);
             ReadStorage(data);
             ReadCpuUsage(data);
+            ReadProcessEnergy(data);
             ReadChargeEta(data);
         }
 
@@ -73,17 +87,41 @@ namespace BatteryPulse
             try
             {
                 string root = Path.GetPathRoot(Environment.SystemDirectory);
-                if (string.IsNullOrWhiteSpace(root)) return;
-                var drive = new DriveInfo(root);
-                if (!drive.IsReady || drive.TotalSize <= 0) return;
+                data.StorageVolumes.Clear();
+                foreach (DriveInfo drive in DriveInfo.GetDrives())
+                {
+                    if (!drive.IsReady || drive.TotalSize <= 0) continue;
+                    if (drive.DriveType == DriveType.CDRom || drive.DriveType == DriveType.Ram) continue;
 
-                double totalGiB = drive.TotalSize / 1024.0 / 1024.0 / 1024.0;
-                double freeGiB = drive.AvailableFreeSpace / 1024.0 / 1024.0 / 1024.0;
-                data.StorageTotalGiB = totalGiB;
-                data.StorageFreeGiB = Math.Max(0, freeGiB);
-                data.StorageUsedGiB = Math.Max(0, totalGiB - freeGiB);
-                data.StorageUsedPercent = Math.Max(0, Math.Min(100, data.StorageUsedGiB.Value / totalGiB * 100.0));
-                data.StorageSource = "Windows DriveInfo " + root.TrimEnd('\\');
+                    double totalGiB = drive.TotalSize / 1024.0 / 1024.0 / 1024.0;
+                    double freeGiB = Math.Max(0, drive.AvailableFreeSpace / 1024.0 / 1024.0 / 1024.0);
+                    double usedGiB = Math.Max(0, totalGiB - freeGiB);
+                    data.StorageVolumes.Add(new StorageVolumeSnapshot
+                    {
+                        Name = drive.Name.TrimEnd('\\'),
+                        TotalGiB = totalGiB,
+                        UsedGiB = usedGiB,
+                        FreeGiB = freeGiB,
+                        UsedPercent = Math.Max(0, Math.Min(100, usedGiB / totalGiB * 100.0))
+                    });
+
+                    if (!string.IsNullOrWhiteSpace(root) && string.Equals(drive.Name, root, StringComparison.OrdinalIgnoreCase))
+                    {
+                        data.StorageTotalGiB = totalGiB;
+                        data.StorageFreeGiB = freeGiB;
+                        data.StorageUsedGiB = usedGiB;
+                        data.StorageUsedPercent = Math.Max(0, Math.Min(100, usedGiB / totalGiB * 100.0));
+                    }
+                }
+
+                if (data.StorageVolumes.Count > 0)
+                {
+                    data.StorageVolumes.Sort(delegate(StorageVolumeSnapshot left, StorageVolumeSnapshot right)
+                    {
+                        return string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase);
+                    });
+                    data.StorageSource = "Windows DriveInfo " + string.Join(", ", data.StorageVolumes.Select(volume => volume.Name).ToArray());
+                }
             }
             catch { }
         }
@@ -115,6 +153,114 @@ namespace BatteryPulse
                 previousTotal = totalValue;
             }
             catch { }
+        }
+
+        private void ReadProcessEnergy(BatterySnapshot data)
+        {
+            if (lastEnergyRanking.Count > 0)
+            {
+                data.EnergyRanking = lastEnergyRanking.Select(delegate(EnergyProcessSnapshot item)
+                {
+                    return new EnergyProcessSnapshot
+                    {
+                        Name = item.Name,
+                        SharePercent = item.SharePercent,
+                        EstimatedWatts = item.EstimatedWatts
+                    };
+                }).ToList();
+                data.EnergyRankingSource = lastEnergyRankingSource;
+            }
+
+            DateTime now = DateTime.UtcNow;
+            if ((now - lastProcessEnergyRead).TotalSeconds < 5) return;
+            lastProcessEnergyRead = now;
+
+            var currentProcesses = new Dictionary<int, ProcessCpuSample>();
+            try
+            {
+                foreach (Process process in Process.GetProcesses())
+                {
+                    try
+                    {
+                        string name = process.ProcessName;
+                        if (string.IsNullOrWhiteSpace(name)) continue;
+                        currentProcesses[process.Id] = new ProcessCpuSample
+                        {
+                            Name = name,
+                            CpuTicks = process.TotalProcessorTime.Ticks
+                        };
+                    }
+                    catch
+                    {
+                        // Access to short-lived or protected processes can fail.
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                }
+            }
+            catch
+            {
+                return;
+            }
+
+            if (previousProcesses.Count > 0)
+            {
+                var groupedTicks = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                foreach (KeyValuePair<int, ProcessCpuSample> current in currentProcesses)
+                {
+                    ProcessCpuSample previous;
+                    if (!previousProcesses.TryGetValue(current.Key, out previous)) continue;
+                    long delta = current.Value.CpuTicks - previous.CpuTicks;
+                    if (delta <= 0) continue;
+
+                    double existing;
+                    if (!groupedTicks.TryGetValue(current.Value.Name, out existing)) existing = 0;
+                    groupedTicks[current.Value.Name] = existing + delta;
+                }
+
+                double totalTicks = groupedTicks.Values.Sum();
+                if (totalTicks > 0)
+                {
+                    List<EnergyProcessSnapshot> ranking = groupedTicks
+                        .Select(delegate(KeyValuePair<string, double> item)
+                        {
+                            double share = item.Value / totalTicks * 100.0;
+                            return new EnergyProcessSnapshot
+                            {
+                                Name = item.Key,
+                                SharePercent = share,
+                                EstimatedWatts = data.SystemWatts.HasValue && data.SystemWatts.Value > 0
+                                    ? data.SystemWatts.Value * share / 100.0
+                                    : (double?)null
+                            };
+                        })
+                        .OrderByDescending(delegate(EnergyProcessSnapshot item) { return item.SharePercent; })
+                        .Take(5)
+                        .ToList();
+
+                    if (ranking.Count > 0)
+                    {
+                        lastEnergyRanking = ranking;
+                        lastEnergyRankingSource = "Windows Process CPU time / system power allocation estimate";
+                        data.EnergyRanking = ranking.Select(delegate(EnergyProcessSnapshot item)
+                        {
+                            return new EnergyProcessSnapshot
+                            {
+                                Name = item.Name,
+                                SharePercent = item.SharePercent,
+                                EstimatedWatts = item.EstimatedWatts
+                            };
+                        }).ToList();
+                        data.EnergyRankingSource = lastEnergyRankingSource;
+                    }
+                }
+            }
+
+            previousProcesses.Clear();
+            foreach (KeyValuePair<int, ProcessCpuSample> item in currentProcesses)
+                previousProcesses[item.Key] = item.Value;
         }
 
         private static void ReadChargeEta(BatterySnapshot data)

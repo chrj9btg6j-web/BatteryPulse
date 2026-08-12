@@ -585,6 +585,7 @@ namespace BatteryPulse
             double? chargeRate = AverageChargeRate(data, history);
             double? dischargeRate = AverageDischargeRate(data, history);
             double? systemRate = AverageSystemRate(data, history);
+            double? currentWh = CurrentEnergyWh(data, fullWh, percent);
 
             bool reachedTarget = percent.HasValue && percent.Value >= targetPercent - 0.5;
             if (reachedTarget)
@@ -606,7 +607,10 @@ namespace BatteryPulse
                 double remainingPercent = targetPercent - percent.Value;
                 if (chargeRate.HasValue && chargeRate.Value > 0)
                 {
-                    double remainingWh = fullWh.Value * remainingPercent / 100.0;
+                    double targetWh = fullWh.Value * targetPercent / 100.0;
+                    double remainingWh = currentWh.HasValue
+                        ? Math.Max(0, targetWh - currentWh.Value)
+                        : fullWh.Value * remainingPercent / 100.0;
                     double taperFactor = percent.Value >= 90 ? 0.50 : (percent.Value >= 80 ? 0.62 : 0.72);
                     double effectiveRate = chargeRate.Value * taperFactor;
                     data.ChargeEtaSeconds = ClampSeconds(remainingWh / effectiveRate * 3600.0, 300, 172800);
@@ -627,7 +631,10 @@ namespace BatteryPulse
 
             if (fullWh.HasValue && percent.HasValue)
             {
-                double availableWh = fullWh.Value * Math.Max(0, percent.Value - ReservePercent) / 100.0;
+                double reserveWh = fullWh.Value * ReservePercent / 100.0;
+                double availableWh = currentWh.HasValue
+                    ? Math.Max(0, currentWh.Value - reserveWh)
+                    : fullWh.Value * Math.Max(0, percent.Value - ReservePercent) / 100.0;
                 double? effectiveDischargeRate = (!data.IsAcLine || IsDischarging(data)) && dischargeRate.HasValue
                     ? dischargeRate.Value * 1.10
                     : (systemRate.HasValue ? systemRate.Value * 1.15 : (double?)null);
@@ -637,6 +644,20 @@ namespace BatteryPulse
                     data.RuntimeForecastState = "可用時間";
                 }
             }
+        }
+
+        private static double? CurrentEnergyWh(BatterySnapshot data, double? fullWh, double? percent)
+        {
+            if (data != null && data.CurrentCapacityMwh.HasValue && data.CurrentCapacityMwh.Value > 0)
+            {
+                double current = data.CurrentCapacityMwh.Value / 1000.0;
+                if (fullWh.HasValue && fullWh.Value > 0)
+                    current = Math.Min(fullWh.Value, current);
+                return current;
+            }
+            if (fullWh.HasValue && fullWh.Value > 0 && percent.HasValue)
+                return fullWh.Value * Math.Max(0, Math.Min(100, percent.Value)) / 100.0;
+            return null;
         }
 
         private static double TargetPercent(BatterySnapshot data)
