@@ -164,8 +164,7 @@ namespace BatteryPulse
                     return new EnergyProcessSnapshot
                     {
                         Name = item.Name,
-                        SharePercent = item.SharePercent,
-                        EstimatedWatts = item.EstimatedWatts
+                        CpuUsagePercent = item.CpuUsagePercent
                     };
                 }).ToList();
                 data.EnergyRankingSource = lastEnergyRankingSource;
@@ -173,6 +172,9 @@ namespace BatteryPulse
 
             DateTime now = DateTime.UtcNow;
             if ((now - lastProcessEnergyRead).TotalSeconds < 5) return;
+            double sampleSeconds = lastProcessEnergyRead == DateTime.MinValue
+                ? 0
+                : (now - lastProcessEnergyRead).TotalSeconds;
             lastProcessEnergyRead = now;
 
             var currentProcesses = new Dictionary<int, ProcessCpuSample>();
@@ -205,7 +207,7 @@ namespace BatteryPulse
                 return;
             }
 
-            if (previousProcesses.Count > 0)
+            if (previousProcesses.Count > 0 && sampleSeconds > 0)
             {
                 var groupedTicks = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
                 foreach (KeyValuePair<int, ProcessCpuSample> current in currentProcesses)
@@ -220,39 +222,43 @@ namespace BatteryPulse
                     groupedTicks[current.Value.Name] = existing + delta;
                 }
 
-                double totalTicks = groupedTicks.Values.Sum();
-                if (totalTicks > 0)
+                if (groupedTicks.Count > 0)
                 {
                     List<EnergyProcessSnapshot> ranking = groupedTicks
                         .Select(delegate(KeyValuePair<string, double> item)
                         {
-                            double share = item.Value / totalTicks * 100.0;
+                            double share = item.Value /
+                                (TimeSpan.TicksPerSecond * sampleSeconds * Math.Max(1, Environment.ProcessorCount)) * 100.0;
                             return new EnergyProcessSnapshot
                             {
                                 Name = item.Key,
-                                SharePercent = share,
-                                EstimatedWatts = data.SystemWatts.HasValue && data.SystemWatts.Value > 0
-                                    ? data.SystemWatts.Value * share / 100.0
-                                    : (double?)null
+                                CpuUsagePercent = Math.Max(0, Math.Min(100, share))
                             };
                         })
-                        .OrderByDescending(delegate(EnergyProcessSnapshot item) { return item.SharePercent; })
+                        .Where(delegate(EnergyProcessSnapshot item) { return item.CpuUsagePercent >= 0.05; })
+                        .OrderByDescending(delegate(EnergyProcessSnapshot item) { return item.CpuUsagePercent; })
                         .Take(5)
                         .ToList();
 
                     if (ranking.Count > 0)
                     {
                         lastEnergyRanking = ranking;
-                        lastEnergyRankingSource = "Windows Process CPU time / system power allocation estimate";
+                        lastEnergyRankingSource = "Windows Process CPU time / 全系統 CPU 使用率，每 5 秒更新";
                         data.EnergyRanking = ranking.Select(delegate(EnergyProcessSnapshot item)
                         {
                             return new EnergyProcessSnapshot
                             {
                                 Name = item.Name,
-                                SharePercent = item.SharePercent,
-                                EstimatedWatts = item.EstimatedWatts
+                                CpuUsagePercent = item.CpuUsagePercent
                             };
                         }).ToList();
+                        data.EnergyRankingSource = lastEnergyRankingSource;
+                    }
+                    else
+                    {
+                        lastEnergyRanking.Clear();
+                        lastEnergyRankingSource = "目前沒有明顯的程序 CPU 活動";
+                        data.EnergyRanking.Clear();
                         data.EnergyRankingSource = lastEnergyRankingSource;
                     }
                 }

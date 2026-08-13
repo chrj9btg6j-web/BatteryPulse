@@ -23,6 +23,7 @@ namespace BatteryPulse
         private readonly StackPanel statusRow;
         private readonly TextBlock titleText;
         private readonly TextBlock chargerText;
+        private readonly TextBlock adapterInputText;
         private readonly Border chargerSpacer;
         private readonly Border titleSpacer;
         private readonly Image chargeIcon;
@@ -36,6 +37,8 @@ namespace BatteryPulse
         private readonly TextBlock powerValue;
         private readonly StackPanel powerGroup;
         private readonly Border powerSpacer;
+        private readonly TextBlock cpuPowerText;
+        private readonly TextBlock gpuPowerText;
         private readonly TextBlock cpuText;
         private readonly Border cpuSpacer;
         private readonly TextBlock gpuText;
@@ -100,6 +103,9 @@ namespace BatteryPulse
             chargerSpacer = Spacer(14);
             statusRow.Children.Add(chargerSpacer);
 
+            adapterInputText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            statusRow.Children.Add(adapterInputText);
+
             chargeIcon = IconCell(LoadIcon("BatteryPulse.ChargeLightning.png"), false);
             chargePlus = TextCell("+", 11.5, FontWeights.Medium, "#FF2FAF6F");
             chargePlus.Margin = new Thickness(0, 0, 5, 0);
@@ -120,6 +126,11 @@ namespace BatteryPulse
             statusRow.Children.Add(powerGroup);
             powerSpacer = Spacer(14);
             statusRow.Children.Add(powerSpacer);
+
+            cpuPowerText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            statusRow.Children.Add(cpuPowerText);
+            gpuPowerText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            statusRow.Children.Add(gpuPowerText);
 
             cpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
             statusRow.Children.Add(cpuText);
@@ -160,6 +171,9 @@ namespace BatteryPulse
             powerIcon.Visibility = Visibility.Collapsed;
             powerGroup.Visibility = Visibility.Collapsed;
             powerSpacer.Visibility = Visibility.Collapsed;
+            cpuPowerText.Visibility = Visibility.Collapsed;
+            gpuPowerText.Visibility = Visibility.Collapsed;
+            adapterInputText.Visibility = Visibility.Collapsed;
             chargerText.Visibility = Visibility.Collapsed;
             chargerSpacer.Visibility = Visibility.Collapsed;
             percentText.Visibility = Visibility.Collapsed;
@@ -213,9 +227,12 @@ namespace BatteryPulse
             switch (id)
             {
                 case "charger": return chargerText;
+                case "input": return adapterInputText;
                 case "charge": return chargeGroup;
                 case "percent": return percentText;
                 case "power": return powerGroup;
+                case "cpuPower": return cpuPowerText;
+                case "gpuPower": return gpuPowerText;
                 case "cpuTemp": return cpuText;
                 case "gpuTemp": return gpuText;
                 case "eta": return etaText;
@@ -331,8 +348,11 @@ namespace BatteryPulse
             {
                 ReloadSettingsIfChanged();
 
-            bool hasChargePower = HasPositive(data.Watts);
+            bool hasBatteryFlow = HasPositive(data.Watts);
+            bool hasAdapterInput = HasPositive(data.AdapterInputWatts);
             bool hasSystemPower = HasPositive(data.SystemWatts);
+            bool hasCpuPower = HasPositive(data.CpuPowerWatts);
+            bool hasGpuPower = HasPositive(data.GpuPowerWatts);
             bool hasPercent = data.Percent.HasValue && data.Percent.Value >= 0;
             bool hasCpu = HasTemperature(data.CpuTempC);
             bool hasGpu = HasTemperature(data.GpuTempC);
@@ -340,10 +360,16 @@ namespace BatteryPulse
             bool hasCpuUsage = data.CpuUsagePercent.HasValue && data.CpuUsagePercent.Value >= 0;
             bool hasGpuUsage = data.GpuUsagePercent.HasValue && data.GpuUsagePercent.Value >= 0;
             bool charging = data.IsAcLine && (data.IsCharging ||
-                (hasChargePower && string.Equals(data.BatteryPowerMode, "充電", StringComparison.OrdinalIgnoreCase)));
+                (hasBatteryFlow && string.Equals(data.BatteryPowerMode, "充電", StringComparison.OrdinalIgnoreCase)));
             bool hasEta = data.RuntimeEtaSeconds.HasValue && data.RuntimeEtaSeconds.Value > 0;
-            // 放電時的 data.Watts 是電池流出功率，不應再以「充電瓦數」顯示。
-            bool showChargeGroup = charging && hasChargePower;
+            // The green value represents effective supply: the measured whole-system
+            // draw plus the battery charge flow. It is shown only when both readings
+            // are available and the battery is actually charging.
+            double? effectiveSupplyWatts = charging && hasBatteryFlow && hasSystemPower
+                ? data.SystemWatts.Value + data.Watts.Value
+                : (double?)null;
+            bool hasEffectiveSupply = HasPositive(effectiveSupplyWatts);
+            bool showChargeGroup = hasEffectiveSupply;
             string type = data.IsAcLine
                 ? (string.IsNullOrWhiteSpace(data.ChargerType) ? string.Empty : data.ChargerType)
                 : string.Empty;
@@ -354,13 +380,21 @@ namespace BatteryPulse
 
             chargerText.Text = knownCharger ? ChargerLabel(data, charging) : string.Empty;
             chargerText.Visibility = knownCharger && IsItemEnabled("charger") ? Visibility.Visible : Visibility.Collapsed;
+            adapterInputText.Text = hasAdapterInput ? "輸入 " + FormatWatts(data.AdapterInputWatts) : string.Empty;
+            adapterInputText.Visibility = hasAdapterInput && IsItemEnabled("input") ? Visibility.Visible : Visibility.Collapsed;
             chargeGroup.Visibility = showChargeGroup && IsItemEnabled("charge") ? Visibility.Visible : Visibility.Collapsed;
             chargePlus.Visibility = chargeGroup.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
-            chargeValue.Text = FormatWatts(data.Watts);
+            chargePlus.Text = "有效 +";
+            chargePlus.Foreground = Brush("#FF2FAF6F");
+            chargeValue.Text = FormatWatts(effectiveSupplyWatts);
             percentText.Text = percent;
             percentText.Visibility = hasPercent && IsItemEnabled("percent") ? Visibility.Visible : Visibility.Collapsed;
             powerGroup.Visibility = hasSystemPower && IsItemEnabled("power") ? Visibility.Visible : Visibility.Collapsed;
             powerValue.Text = FormatWatts(data.SystemWatts);
+            cpuPowerText.Text = hasCpuPower ? "CPU " + FormatWatts(data.CpuPowerWatts) : string.Empty;
+            cpuPowerText.Visibility = hasCpuPower && IsItemEnabled("cpuPower") ? Visibility.Visible : Visibility.Collapsed;
+            gpuPowerText.Text = hasGpuPower ? "GPU " + FormatWatts(data.GpuPowerWatts) : string.Empty;
+            gpuPowerText.Visibility = hasGpuPower && IsItemEnabled("gpuPower") ? Visibility.Visible : Visibility.Collapsed;
             cpuText.Text = hasCpu ? "CPU " + FormatTemperature(data.CpuTempC) : string.Empty;
             cpuText.Visibility = hasCpu && IsItemEnabled("cpuTemp") ? Visibility.Visible : Visibility.Collapsed;
             gpuText.Text = hasGpu ? "GPU " + FormatTemperature(data.GpuTempC) : string.Empty;
@@ -373,7 +407,7 @@ namespace BatteryPulse
             cpuUsageText.Visibility = hasCpuUsage && IsItemEnabled("cpuUsage") ? Visibility.Visible : Visibility.Collapsed;
             gpuUsageText.Text = hasGpuUsage ? "GPU " + FormatPercent(data.GpuUsagePercent) : string.Empty;
             gpuUsageText.Visibility = hasGpuUsage && IsItemEnabled("gpuUsage") ? Visibility.Visible : Visibility.Collapsed;
-            SetBlinking(chargeIcon, charging, ref chargeBlinking, 860);
+            SetBlinking(chargeIcon, hasEffectiveSupply && chargeGroup.Visibility == Visibility.Visible, ref chargeBlinking, 860);
             SetBlinking(powerIcon, hasSystemPower, ref powerBlinking, 980);
             ApplyLayoutVisibility();
                 shell.ToolTip = BuildSourceToolTip(data, type);
@@ -586,11 +620,15 @@ namespace BatteryPulse
         private static string BuildSourceToolTip(BatterySnapshot data, string type)
         {
             string typeSource = string.IsNullOrWhiteSpace(data.ChargerTypeSource) ? "未知" : data.ChargerTypeSource;
-            string systemSource = data.IsAcLine
-                ? "LibreHardwareMonitor 元件功率或可用電池資料"
-                : "Windows BatteryStatus / DischargeRate";
-            return "充電：Windows BatteryStatus / ChargeRate（電池吸收功率）\n" +
-                "耗電：" + systemSource + "\n" +
+            bool charging = data.IsAcLine && (data.IsCharging ||
+                (HasPositive(data.Watts) && string.Equals(data.BatteryPowerMode, "充電", StringComparison.OrdinalIgnoreCase)));
+            bool hasEffectiveSupply = charging && HasPositive(data.Watts) && HasPositive(data.SystemWatts);
+            return "充電器即時輸入：" + (string.IsNullOrWhiteSpace(data.AdapterInputPowerSource) ? "未提供，未以其他數值推算" : data.AdapterInputPowerSource) + "\n" +
+                "電池端讀值：" + (string.IsNullOrWhiteSpace(data.BatteryPowerSource) ? "未提供" : data.BatteryPowerSource) + "\n" +
+                "整機功耗：" + (string.IsNullOrWhiteSpace(data.SystemWattsSource) ? "未提供" : data.SystemWattsSource) + "\n" +
+                "綠色有效供電：" + (hasEffectiveSupply ? "整機功耗 + 電池吸收" : "未顯示（需要完整讀值且正在充電）") + "\n" +
+                "CPU 功耗：" + (string.IsNullOrWhiteSpace(data.CpuPowerSource) ? "未提供" : data.CpuPowerSource) + "\n" +
+                "作用中 GPU 功耗：" + (string.IsNullOrWhiteSpace(data.GpuPowerSource) ? "未提供" : data.GpuPowerSource) + "\n" +
                 "充電器：" + type + "（" + typeSource + "）\n" +
                 "更新：" + data.ReadAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
         }

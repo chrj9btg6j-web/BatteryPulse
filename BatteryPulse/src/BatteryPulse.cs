@@ -364,12 +364,12 @@ namespace BatteryPulse
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(32) });
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2) });
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(32) });
-            grid.Children.Add(CompactCell("電池功率", out wattsValue));
+            grid.Children.Add(CompactCell("電池淨流向", out wattsValue));
             var line = new Border { Width = 1, Height = 58, Background = Brush("#24FFFFFF"), VerticalAlignment = VerticalAlignment.Center };
             Grid.SetRowSpan(line, 3);
             Grid.SetColumn(line, 1);
             grid.Children.Add(line);
-            var right = CompactCell("電腦耗電", out systemWattsValue);
+            var right = CompactCell("整機功耗", out systemWattsValue);
             Grid.SetColumn(right, 2);
             grid.Children.Add(right);
             var day = CompactCell("今日耗能", out dayEnergyValue);
@@ -389,8 +389,8 @@ namespace BatteryPulse
             batteryBar = new MeterBar("電池電量", "#FF54D4B1");
             panel.Children.Add(batteryBar.Root);
 
-            wattsRow = new MetricRow("電池功率", "#FFD7F3E2");
-            systemWattsRow = new MetricRow("電腦耗電", "#FFBCEFD8");
+            wattsRow = new MetricRow("電池淨流向", "#FFD7F3E2");
+            systemWattsRow = new MetricRow("整機功耗", "#FFBCEFD8");
             cpuTempRow = new MetricRow("CPU 溫度", "#FFDDEFE8");
             gpuTempRow = new MetricRow("NVIDIA 溫度", "#FFDDEFE8");
             panel.Children.Add(wattsRow.Root);
@@ -1234,8 +1234,7 @@ namespace BatteryPulse
     public sealed class EnergyProcessSnapshot
     {
         public string Name;
-        public double SharePercent;
-        public double? EstimatedWatts;
+        public double CpuUsagePercent;
     }
 
     // Keeps GPU usage and temperature tied to the same physical adapter.
@@ -1244,8 +1243,10 @@ namespace BatteryPulse
         public string Name;
         public double? UsagePercent;
         public double? TemperatureC;
+        public double? PowerWatts;
         public string UsageSource;
         public string TemperatureSource;
+        public string PowerSource;
     }
 
     public sealed class BatterySnapshot
@@ -1255,7 +1256,13 @@ namespace BatteryPulse
         public string BatteryPowerMode;
         public double? SystemWatts;
         public string SystemWattsSource = "未取得";
-        public double EstimatedComponentWatts;
+        public double? AdapterInputWatts;
+        public string AdapterInputPowerSource;
+        public double? CpuPowerWatts;
+        public string CpuPowerSource;
+        public double? GpuPowerWatts;
+        public string GpuPowerSource;
+        public string BatteryPowerSource;
         // These values are intentionally nullable. A charger label alone is not
         // enough evidence of its rated or negotiated power.
         public double? AdapterRatedWatts;
@@ -1374,19 +1381,8 @@ namespace BatteryPulse
         {
             if (data.Watts.HasValue && string.IsNullOrEmpty(data.BatteryPowerMode))
             {
-                if (data.IsCharging) data.BatteryPowerMode = "充電";
-                else if (!data.IsAcLine) data.BatteryPowerMode = "放電";
-                else data.Watts = null;
-            }
-            if ((!data.SystemWatts.HasValue || data.SystemWatts.Value <= 0) && !data.IsAcLine && data.Watts.HasValue && data.Watts.Value > 0)
-            {
-                data.SystemWatts = Math.Abs(data.Watts.Value);
-                data.SystemWattsSource = "Windows BatteryStatus / DischargeRate";
-            }
-            if ((!data.SystemWatts.HasValue || data.SystemWatts.Value <= 0) && data.EstimatedComponentWatts > 0)
-            {
-                data.SystemWatts = data.EstimatedComponentWatts;
-                data.SystemWattsSource = "LibreHardwareMonitor 元件功率估算";
+                data.Watts = null;
+                data.BatteryPowerSource = null;
             }
             if (!data.SystemWatts.HasValue || data.SystemWatts.Value <= 0)
                 data.SystemWattsSource = "未取得";
@@ -1418,31 +1414,44 @@ namespace BatteryPulse
                 }
                 bool hasCharge = chargeMw.HasValue && chargeMw.Value > 0;
                 bool hasDischarge = dischargeMw.HasValue && dischargeMw.Value > 0;
-                bool chargeSignal = hasCharge && (data.IsCharging ||
-                    (charging.HasValue ? charging.Value : !hasDischarge));
+                bool explicitCharging = charging.HasValue && charging.Value;
+                bool explicitDischarging = discharging.HasValue && discharging.Value;
+                if (explicitCharging)
+                {
+                    data.BatteryPowerMode = "充電";
+                    data.BatteryPowerSource = "Windows BatteryStatus / Charging flag";
+                }
+                else if (explicitDischarging)
+                {
+                    data.BatteryPowerMode = "放電";
+                    data.BatteryPowerSource = "Windows BatteryStatus / Discharging flag";
+                }
+                bool chargeSignal = hasCharge && !hasDischarge && !explicitDischarging &&
+                    (explicitCharging || !charging.HasValue);
+                bool dischargeSignal = hasDischarge && !hasCharge && !explicitCharging &&
+                    (explicitDischarging || !discharging.HasValue);
                 if (chargeSignal)
                 {
                     data.Watts = NormalizeWatts(chargeMw.Value);
                     data.BatteryPowerMode = "充電";
+                    data.BatteryPowerSource = "Windows BatteryStatus / ChargeRate";
                     data.IsAcLine = true;
                     data.IsCharging = true;
                 }
-                else if (hasDischarge && (!data.IsAcLine || !data.IsCharging))
+                else if (dischargeSignal)
                 {
                     data.Watts = NormalizeWatts(dischargeMw.Value);
                     data.BatteryPowerMode = "放電";
+                    data.BatteryPowerSource = "Windows BatteryStatus / DischargeRate";
                     data.IsCharging = false;
-                    if (data.Watts.Value > 0)
-                    {
-                        data.SystemWatts = data.Watts;
-                        data.SystemWattsSource = "Windows BatteryStatus / DischargeRate";
-                    }
                 }
-                if (!data.Watts.HasValue && currentMw.HasValue && currentMw.Value > 0 && (data.IsCharging || !data.IsAcLine))
+                if (!data.Watts.HasValue && currentMw.HasValue && currentMw.Value > 0 &&
+                    (explicitCharging || explicitDischarging))
                 {
                     data.Watts = NormalizeWatts(currentMw.Value);
-                    data.BatteryPowerMode = data.IsCharging ? "充電" : "放電";
-                    if (data.IsCharging) data.IsAcLine = true;
+                    data.BatteryPowerMode = explicitCharging ? "充電" : "放電";
+                    data.BatteryPowerSource = "Windows BatteryStatus / CurrentRate";
+                    if (explicitCharging) data.IsAcLine = true;
                 }
                 double? voltage = Number(item, "Voltage");
                 if (voltage.HasValue && voltage.Value > 0) data.VoltageMv = voltage.Value;
@@ -1477,17 +1486,12 @@ namespace BatteryPulse
             TryQuery("root\\cimv2", "SELECT * FROM Win32_Battery", delegate(ManagementBaseObject item)
             {
                 double? batteryStatus = Number(item, "BatteryStatus");
-                if (batteryStatus.HasValue && batteryStatus.Value >= 6 && batteryStatus.Value <= 9)
+                if (batteryStatus.HasValue && batteryStatus.Value >= 6 && batteryStatus.Value <= 9 &&
+                    string.IsNullOrWhiteSpace(data.BatteryPowerMode))
                 {
                     // Win32_Battery 6-9 代表各種「充電中」狀態。
                     data.IsCharging = true;
                     data.IsAcLine = true;
-                    if (string.Equals(data.BatteryPowerMode, "放電", StringComparison.OrdinalIgnoreCase))
-                    {
-                        data.Watts = null;
-                        data.SystemWatts = null;
-                        data.BatteryPowerMode = null;
-                    }
                 }
                 double? percent = Number(item, "EstimatedChargeRemaining");
                 if (percent.HasValue) data.Percent = percent.Value;
@@ -1736,8 +1740,8 @@ namespace BatteryPulse
         {
             var parts = new List<string>();
             parts.Add("1 秒背景更新");
-            if (!data.Watts.HasValue) parts.Add("瓦數 N/A");
-            if (!data.SystemWatts.HasValue) parts.Add("電腦耗電 N/A");
+            if (!data.Watts.HasValue) parts.Add("電池淨流向 N/A");
+            if (!data.SystemWatts.HasValue) parts.Add("整機功耗 N/A");
             if (!data.StorageTempC.HasValue) parts.Add("儲存裝置溫度 N/A");
             if (!data.CpuTempC.HasValue) parts.Add("CPU 溫度 N/A");
             if (!data.GpuTempC.HasValue) parts.Add("GPU 溫度 N/A");
@@ -1851,7 +1855,7 @@ namespace BatteryPulse
     {
         public static readonly string[] TopBarItemIds =
         {
-            "charger", "charge", "percent", "power", "cpuTemp", "gpuTemp",
+            "charger", "input", "charge", "percent", "power", "cpuPower", "gpuPower", "cpuTemp", "gpuTemp",
             "eta", "ram", "cpuUsage", "gpuUsage"
         };
 
@@ -1861,7 +1865,6 @@ namespace BatteryPulse
         public double WindowLeft;
         public double WindowTop;
         public bool WidgetExpanded;
-        public double PdWatts = 100;
         public int BatteryLimitPercent = 80;
         public bool BatteryLimitHasApplied;
         public double CpuWarnC = 85;
@@ -1869,7 +1872,7 @@ namespace BatteryPulse
         public bool AlertsEnabled = true;
         public string UpdateApiUrl = UpdateService.DefaultApiUrl;
         public string UpdatePageUrl = UpdateService.DefaultPageUrl;
-        public string TopBarItems = "charger,charge,percent,power,cpuTemp,gpuTemp,eta,ram,cpuUsage,gpuUsage";
+        public string TopBarItems = "charger,input,charge,percent,power,cpuPower,gpuPower,cpuTemp,gpuTemp,eta,ram,cpuUsage,gpuUsage";
         public string TopBarHiddenItems = "ram,cpuUsage,gpuUsage";
         public bool TopBarEtaDefaultApplied;
         public double DayWh;
@@ -1925,7 +1928,6 @@ namespace BatteryPulse
                     if (key == "windowTop") settings.WindowTop = ParseDouble(value);
                     if (key == "widgetExpanded") settings.WidgetExpanded = value == "1";
                     if (key == "expanded") settings.WidgetExpanded = value == "1";
-                    if (key == "pdWatts") settings.PdWatts = Math.Max(20, ParseDouble(value));
                     if (key == "batteryLimitPercent") settings.BatteryLimitPercent = (int)Math.Max(40, Math.Min(100, ParseDouble(value)));
                     if (key == "batteryLimitHasApplied") settings.BatteryLimitHasApplied = value == "1";
                     if (key == "cpuWarnC") settings.CpuWarnC = Math.Max(60, ParseDouble(value));
@@ -1968,7 +1970,6 @@ namespace BatteryPulse
                     "windowTop=" + WindowTop.ToString("R", CultureInfo.InvariantCulture),
                     "widgetExpanded=" + (WidgetExpanded ? "1" : "0"),
                     "expanded=" + (WidgetExpanded ? "1" : "0"),
-                    "pdWatts=" + PdWatts.ToString("R", CultureInfo.InvariantCulture),
                     "batteryLimitPercent=" + BatteryLimitPercent.ToString(CultureInfo.InvariantCulture),
                     "batteryLimitHasApplied=" + (BatteryLimitHasApplied ? "1" : "0"),
                     "cpuWarnC=" + CpuWarnC.ToString("R", CultureInfo.InvariantCulture),
@@ -1998,11 +1999,22 @@ namespace BatteryPulse
                 string id = item.Trim();
                 if (Array.IndexOf(TopBarItemIds, id) >= 0 && !result.Contains(id)) result.Add(id);
             }
+            InsertMissingAfter(result, "input", "charger");
+            InsertMissingAfter(result, "cpuPower", "power");
+            InsertMissingAfter(result, "gpuPower", "cpuPower");
             foreach (string id in TopBarItemIds)
             {
                 if (!result.Contains(id)) result.Add(id);
             }
             return result;
+        }
+
+        private static void InsertMissingAfter(List<string> items, string id, string anchor)
+        {
+            if (items == null || items.Contains(id)) return;
+            int anchorIndex = items.IndexOf(anchor);
+            if (anchorIndex < 0) items.Add(id);
+            else items.Insert(anchorIndex + 1, id);
         }
 
         public bool IsTopBarItemEnabled(string id)
@@ -2025,9 +2037,12 @@ namespace BatteryPulse
             switch (id)
             {
                 case "charger": return "充電器類型";
-                case "charge": return "充電瓦數";
+                case "input": return "充電器即時輸入";
+                case "charge": return "電池淨流向";
                 case "percent": return "電池電量";
-                case "power": return "電腦耗電";
+                case "power": return "整機功耗";
+                case "cpuPower": return "CPU 功耗";
+                case "gpuPower": return "作用中 GPU 功耗";
                 case "cpuTemp": return "CPU 溫度";
                 case "gpuTemp": return "GPU 溫度";
                 case "eta": return "續行";
@@ -2117,6 +2132,8 @@ namespace BatteryPulse
             data.GpuUsageSource = null;
             data.GpuTempC = null;
             data.GpuTempSource = null;
+            data.GpuPowerWatts = null;
+            data.GpuPowerSource = null;
             if (data.GpuDevices != null) data.GpuDevices.Clear();
         }
 
@@ -2231,7 +2248,7 @@ namespace BatteryPulse
             if (string.Equals(sensorType, "Power", StringComparison.OrdinalIgnoreCase))
             {
                 if (value.Value < 0) return;
-                ReadPowerSensor(haystack, sensorName, value.Value, data);
+                ReadPowerSensor(hardwareType, hardwareName, haystack, sensorName, value.Value, data);
                 return;
             }
 
@@ -2342,6 +2359,8 @@ namespace BatteryPulse
                 data.GpuUsageSource = null;
                 data.GpuTempC = null;
                 data.GpuTempSource = null;
+                data.GpuPowerWatts = null;
+                data.GpuPowerSource = null;
                 if (data.GpuDevices.Count > 0)
                     data.GpuStatus = "\u672a\u5075\u6e2c\u5230\u4f7f\u7528\u4e2d\u7684 GPU";
                 return;
@@ -2352,12 +2371,14 @@ namespace BatteryPulse
             data.GpuUsageSource = active.UsageSource;
             data.GpuTempC = active.TemperatureC;
             data.GpuTempSource = active.TemperatureSource;
+            data.GpuPowerWatts = active.PowerWatts;
+            data.GpuPowerSource = active.PowerSource;
             data.GpuStatus = "\u4f7f\u7528\u4e2d";
         }
 
-        private static void ReadPowerSensor(string haystack, string sensorName, double watts, BatterySnapshot data)
+        private static void ReadPowerSensor(string hardwareType, string hardwareName, string haystack, string sensorName, double watts, BatterySnapshot data)
         {
-            if (ChargerTypeDetector.TryFromPowerSensor(haystack, sensorName, data)) return;
+            if (watts <= 0) return;
 
             if (haystack.IndexOf("battery", StringComparison.Ordinal) >= 0 ||
                 haystack.IndexOf("batt", StringComparison.Ordinal) >= 0)
@@ -2365,36 +2386,105 @@ namespace BatteryPulse
                 if (watts <= 0) return;
                 bool discharge = haystack.IndexOf("discharge", StringComparison.Ordinal) >= 0;
                 bool charge = haystack.IndexOf("charge", StringComparison.Ordinal) >= 0 && !discharge;
+                string sensorMode = discharge ? "放電" : (charge ? "充電" : string.Empty);
+                // Windows BatteryStatus reports the battery-flow direction explicitly.
+                // Do not let a later library sensor with a stale or opposite label replace it.
+                if (!string.IsNullOrWhiteSpace(data.BatteryPowerSource) &&
+                    data.BatteryPowerSource.StartsWith("Windows BatteryStatus", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (string.IsNullOrEmpty(sensorMode) ||
+                        !string.Equals(sensorMode, data.BatteryPowerMode, StringComparison.OrdinalIgnoreCase))
+                        return;
+                    if (data.Watts.HasValue) return;
+                    data.Watts = watts;
+                    data.BatteryPowerSource += " + LibreHardwareMonitor / " + sensorName;
+                    return;
+                }
                 if (discharge)
                     data.BatteryPowerMode = "放電";
-                else if (charge && data.IsAcLine)
+                else if (charge)
                     data.BatteryPowerMode = "充電";
-                else if (data.IsCharging)
-                    data.BatteryPowerMode = "充電";
-                else if (!data.IsAcLine)
-                    data.BatteryPowerMode = "放電";
                 else
                     return;
                 data.Watts = watts;
-                if (discharge || (!data.IsAcLine && haystack.IndexOf("power", StringComparison.Ordinal) >= 0))
+                data.BatteryPowerSource = "LibreHardwareMonitor / " + sensorName;
+                return;
+            }
+
+            if (ChargerTypeDetector.TryFromPowerSensor(haystack, sensorName, data))
+            {
+                data.AdapterInputWatts = watts;
+                data.AdapterInputPowerSource = "LibreHardwareMonitor / " + sensorName;
+                return;
+            }
+
+            string name = (sensorName ?? string.Empty).ToLowerInvariant();
+            bool cpuHardware = string.Equals(hardwareType, "Cpu", StringComparison.OrdinalIgnoreCase) ||
+                haystack.IndexOf("cpu", StringComparison.Ordinal) >= 0 ||
+                haystack.IndexOf("processor", StringComparison.Ordinal) >= 0 ||
+                haystack.IndexOf("ryzen", StringComparison.Ordinal) >= 0 ||
+                haystack.IndexOf("intel", StringComparison.Ordinal) >= 0;
+            bool cpuTotalSensor = name.IndexOf("package", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("ppt", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("socket", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("total", StringComparison.Ordinal) >= 0;
+            if (cpuHardware && cpuTotalSensor)
+            {
+                int candidatePriority = CpuPowerSensorPriority(name);
+                int currentPriority = CpuPowerSensorPriority(data.CpuPowerSource);
+                if (!data.CpuPowerWatts.HasValue || candidatePriority > currentPriority)
                 {
-                    if (watts > 0)
-                    {
-                        data.SystemWatts = watts;
-                        data.SystemWattsSource = "LibreHardwareMonitor 電池功率感測器";
-                    }
+                    data.CpuPowerWatts = watts;
+                    data.CpuPowerSource = "LibreHardwareMonitor / " + sensorName;
                 }
                 return;
             }
 
-            if (haystack.IndexOf("cpu", StringComparison.Ordinal) >= 0 ||
-                haystack.IndexOf("package", StringComparison.Ordinal) >= 0 ||
-                haystack.IndexOf("gpu", StringComparison.Ordinal) >= 0 ||
-                haystack.IndexOf("graphics", StringComparison.Ordinal) >= 0 ||
-                haystack.IndexOf("motherboard", StringComparison.Ordinal) >= 0)
+            if (HardwareTemperatureClassifier.IsGpuHardware(hardwareType, hardwareName))
             {
-                data.EstimatedComponentWatts += watts;
+                GpuDeviceSnapshot gpu = GetGpuDevice(data, hardwareType, hardwareName);
+                int candidatePriority = GpuPowerSensorPriority(name);
+                if (candidatePriority <= 0) return;
+                int currentPriority = GpuPowerSensorPriority(gpu.PowerSource);
+                if (!gpu.PowerWatts.HasValue || candidatePriority > currentPriority)
+                {
+                    gpu.PowerWatts = watts;
+                    gpu.PowerSource = "LibreHardwareMonitor / " + sensorName;
+                }
+                return;
             }
+
+            bool systemTotalSensor = name.IndexOf("system total", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("total system", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("platform power", StringComparison.Ordinal) >= 0;
+            bool systemHardware = string.Equals(hardwareType, "Motherboard", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(hardwareType, "SuperIO", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(hardwareType, "EmbeddedController", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(hardwareType, "Computer", StringComparison.OrdinalIgnoreCase);
+            if (systemHardware && systemTotalSensor)
+            {
+                data.SystemWatts = watts;
+                data.SystemWattsSource = "LibreHardwareMonitor / " + sensorName;
+            }
+        }
+
+        private static int CpuPowerSensorPriority(string source)
+        {
+            string value = (source ?? string.Empty).ToLowerInvariant();
+            if (value.IndexOf("package", StringComparison.Ordinal) >= 0) return 100;
+            if (value.IndexOf("ppt", StringComparison.Ordinal) >= 0) return 90;
+            if (value.IndexOf("socket", StringComparison.Ordinal) >= 0) return 80;
+            if (value.IndexOf("total", StringComparison.Ordinal) >= 0) return 70;
+            return 0;
+        }
+
+        private static int GpuPowerSensorPriority(string source)
+        {
+            string value = (source ?? string.Empty).ToLowerInvariant();
+            if (value.IndexOf("total board", StringComparison.Ordinal) >= 0) return 100;
+            if (value.IndexOf("board power", StringComparison.Ordinal) >= 0) return 95;
+            if (value.IndexOf("package", StringComparison.Ordinal) >= 0) return 90;
+            return 0;
         }
 
         private static bool IsPreferredCpuSensor(string sensorName, double candidate, double current)
@@ -2437,12 +2527,6 @@ namespace BatteryPulse
 
     public static class ChargerTypeDetector
     {
-        private static readonly object sync = new object();
-        private static DateTime lastPnpRead = DateTime.MinValue;
-        private static string cachedType = "未知";
-        private static string cachedSource = "尚未取得來源";
-        private static int pnpReadInProgress;
-
         internal static bool TryFromPowerSensor(string haystack, string sensorName, BatterySnapshot data)
         {
             if (data == null || !data.IsAcLine) return false;
@@ -2453,34 +2537,45 @@ namespace BatteryPulse
                 text.IndexOf("battery power", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("batt charge", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("batt discharge", StringComparison.Ordinal) >= 0;
-            bool isPd = text.IndexOf("usb-pd", StringComparison.Ordinal) >= 0 ||
+            bool liveInputReading = text.IndexOf("input power", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("power input", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("input watt", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("adapter input", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("charger input", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("dc input", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("dc-in power", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("pd input", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("usb-pd input", StringComparison.Ordinal) >= 0;
+            bool pdContext = text.IndexOf("usb-pd", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("usb pd", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("power delivery", StringComparison.Ordinal) >= 0 ||
-                text.IndexOf("pd input", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("type-c pd", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("type c pd", StringComparison.Ordinal) >= 0;
-            bool isOriginalAdapter = text.IndexOf("ac adapter", StringComparison.Ordinal) >= 0 ||
+            bool adapterContext = text.IndexOf("ac adapter", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("power adapter", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("adapter input", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("charger input", StringComparison.Ordinal) >= 0 ||
                 text.IndexOf("dc in", StringComparison.Ordinal) >= 0 ||
+                text.IndexOf("dc-in", StringComparison.Ordinal) >= 0 ||
                 (text.IndexOf("asus", StringComparison.Ordinal) >= 0 && text.IndexOf("adapter", StringComparison.Ordinal) >= 0);
+            bool isPd = pdContext;
+            bool isOriginalAdapter = adapterContext && text.IndexOf("asus", StringComparison.Ordinal) >= 0;
 
-            if (isPd && !isBatterySignal)
+            if (!liveInputReading || isBatterySignal) return false;
+
+            if (isPd)
             {
                 data.ChargerType = "USB-PD";
                 data.ChargerTypeSource = "LibreHardwareMonitor " + (string.IsNullOrWhiteSpace(sensorName) ? "Power sensor" : sensorName);
                 data.AdapterPowerSource = data.ChargerTypeSource;
-                return true;
             }
-            if (isOriginalAdapter && !isBatterySignal)
+            else if (isOriginalAdapter)
             {
                 data.ChargerType = "原廠充電器";
                 data.ChargerTypeSource = "LibreHardwareMonitor " + (string.IsNullOrWhiteSpace(sensorName) ? "Power sensor" : sensorName);
                 data.AdapterPowerSource = data.ChargerTypeSource;
-                return true;
             }
-            return false;
+            return true;
         }
 
         public static void Enrich(BatterySnapshot data)
@@ -2496,73 +2591,9 @@ namespace BatteryPulse
             if (!string.Equals(data.ChargerType, "未知", StringComparison.OrdinalIgnoreCase) &&
                 !string.IsNullOrWhiteSpace(data.ChargerType)) return;
 
-            bool requestRefresh = false;
-            lock (sync)
-            {
-                data.ChargerType = cachedType;
-                data.ChargerTypeSource = cachedSource;
-                data.AdapterPowerSource = cachedSource;
-                if ((DateTime.Now - lastPnpRead).TotalSeconds >= 12 &&
-                    Interlocked.CompareExchange(ref pnpReadInProgress, 1, 0) == 0)
-                {
-                    lastPnpRead = DateTime.Now;
-                    requestRefresh = true;
-                }
-            }
-            if (requestRefresh)
-            {
-                ThreadPool.QueueUserWorkItem(delegate
-                {
-                    try { RefreshPnpHint(); }
-                    finally { Interlocked.Exchange(ref pnpReadInProgress, 0); }
-                });
-            }
-        }
-
-        private static void RefreshPnpHint()
-        {
-            bool foundPd = false;
-            bool foundOriginal = false;
-            try
-            {
-                using (var searcher = new ManagementObjectSearcher(
-                    "root\\cimv2",
-                    "SELECT Name FROM Win32_PnPEntity WHERE Name LIKE '%Power Delivery%' OR Name LIKE '%USB-PD%' OR Name LIKE '%USB PD%' OR Name LIKE '%AC Adapter%'"))
-                {
-                    foreach (ManagementObject item in searcher.Get())
-                    {
-                        string name = Convert.ToString(item["Name"], CultureInfo.InvariantCulture) ?? string.Empty;
-                        string text = name.ToLowerInvariant();
-                        if (text.IndexOf("power delivery", StringComparison.Ordinal) >= 0 ||
-                            text.IndexOf("usb-pd", StringComparison.Ordinal) >= 0 ||
-                            text.IndexOf("usb pd", StringComparison.Ordinal) >= 0)
-                            foundPd = true;
-                        if (text.IndexOf("ac adapter", StringComparison.Ordinal) >= 0 &&
-                            text.IndexOf("asus", StringComparison.Ordinal) >= 0)
-                            foundOriginal = true;
-                    }
-                }
-            }
-            catch { }
-
-            lock (sync)
-            {
-                if (foundPd && !foundOriginal)
-                {
-                    cachedType = "USB-PD";
-                    cachedSource = "Windows PnP / UCSI 裝置";
-                }
-                else if (foundOriginal && !foundPd)
-                {
-                    cachedType = "原廠充電器";
-                    cachedSource = "Windows PnP / ASUS AC Adapter";
-                }
-                else
-                {
-                    cachedType = "未知";
-                    cachedSource = "沒有可用的充電器類型來源";
-                }
-            }
+            data.ChargerType = "未知";
+            data.ChargerTypeSource = "硬體未提供可驗證的充電器類型";
+            data.AdapterPowerSource = data.ChargerTypeSource;
         }
     }
 
