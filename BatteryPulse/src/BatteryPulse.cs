@@ -10,6 +10,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -580,7 +581,7 @@ namespace BatteryPulse
             {
                 BatterySnapshot data = null;
                 try { data = reader.Read(); }
-                catch { }
+                catch (Exception ex) { RuntimeDiagnostics.Write("背景讀取硬體快照", ex); }
 
                 if (closing)
                 {
@@ -603,7 +604,11 @@ namespace BatteryPulse
                         }
                     }), DispatcherPriority.Background);
                 }
-                catch { Interlocked.Exchange(ref refreshInProgress, 0); }
+                catch (Exception ex)
+                {
+                    Interlocked.Exchange(ref refreshInProgress, 0);
+                    RuntimeDiagnostics.Write("排程快照更新", ex);
+                }
             });
         }
 
@@ -643,7 +648,7 @@ namespace BatteryPulse
             {
                 if (SnapshotUpdated != null) SnapshotUpdated(data);
             }
-            catch { }
+            catch (Exception ex) { RuntimeDiagnostics.Write("通知頂端狀態列", ex); }
             AdjustExpandedHeight();
         }
 
@@ -1274,6 +1279,7 @@ namespace BatteryPulse
         public string GpuUsageSource;
         public string GpuName;
         public List<GpuDeviceSnapshot> GpuDevices = new List<GpuDeviceSnapshot>();
+        public bool DiscreteGpuUnavailable;
         public double? VoltageMv;
         public double? BatteryTempC;
         public double? StorageTempC;
@@ -1331,22 +1337,37 @@ namespace BatteryPulse
                 data.StatusText = StatusText(ps);
                 data.BatteryLifeRemainingSeconds = ps.BatteryLifeRemaining;
             }
-            catch { }
+            catch (Exception ex) { RuntimeDiagnostics.Write("Windows 電源狀態", ex); }
 
-            ReadWmiBattery(data);
-            ReadGpuStatus(data);
-            ReadHardwareMonitorSensors(data);
-            lhmReader.Read(data);
-            ReadThermalCounter(data);
-            ReadThermalZone(data);
-            FinalizePower(data);
-            performanceReader.Read(data);
-            ChargerTypeDetector.Enrich(data);
-            BatteryLimitController.Enrich(data);
-            if (data.GpuUsagePercent.HasValue && data.GpuUsagePercent.Value > 0.5)
-                data.GpuStatus = "\u4f7f\u7528\u4e2d";
-            data.SourceNote = SourceNote(data);
+            RunSafe("WMI 電池資料", delegate { ReadWmiBattery(data); });
+            RunSafe("WMI 顯示卡狀態", delegate { ReadGpuStatus(data); });
+            RunSafe("硬體監控 WMI", delegate { ReadHardwareMonitorSensors(data); });
+            RunSafe("LibreHardwareMonitor 感測器", delegate { lhmReader.Read(data); });
+            RunSafe("ACPI 溫度計數器", delegate { ReadThermalCounter(data); });
+            RunSafe("ACPI 溫度區域", delegate { ReadThermalZone(data); });
+            RunSafe("功耗快照整理", delegate { FinalizePower(data); });
+            RunSafe("效能與程序功耗", delegate { performanceReader.Read(data); });
+            RunSafe("充電器類型辨識", delegate { ChargerTypeDetector.Enrich(data); });
+            RunSafe("充電上限辨識", delegate { BatteryLimitController.Enrich(data); });
+            RunSafe("顯示卡快照整理", delegate
+            {
+                if (data.GpuUsagePercent.HasValue && data.GpuUsagePercent.Value > 0.5)
+                    data.GpuStatus = "\u4f7f\u7528\u4e2d";
+                data.SourceNote = SourceNote(data);
+            });
             return data;
+        }
+
+        private static void RunSafe(string stage, Action action)
+        {
+            try
+            {
+                if (action != null) action();
+            }
+            catch (Exception ex)
+            {
+                RuntimeDiagnostics.Write(stage, ex);
+            }
         }
 
         private static void FinalizePower(BatterySnapshot data)
@@ -1496,6 +1517,8 @@ namespace BatteryPulse
                 if (name.IndexOf("NVIDIA", StringComparison.OrdinalIgnoreCase) < 0) return;
                 double? code = Number(item, "ConfigManagerErrorCode");
                 if (code.HasValue && Math.Abs(code.Value - 22) < 0.1)
+                    data.DiscreteGpuUnavailable = true;
+                if (code.HasValue && Math.Abs(code.Value - 22) < 0.1)
                     data.GpuStatus = "已停用";
                 else if (code.HasValue && code.Value > 0)
                     data.GpuStatus = "裝置異常 " + code.Value.ToString("0", CultureInfo.InvariantCulture);
@@ -1546,7 +1569,10 @@ namespace BatteryPulse
                     data.CpuTempSource = "ACPI Thermal Zone";
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                RuntimeDiagnostics.Write("ACPI Thermal Zone", ex);
+            }
         }
 
         private static void ReadHardwareMonitorSensors(BatterySnapshot data)
@@ -1628,7 +1654,10 @@ namespace BatteryPulse
                     foreach (ManagementBaseObject item in results) handle(item);
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                RuntimeDiagnostics.Write("WMI " + scopeName, ex);
+            }
         }
 
         private static double? Number(ManagementBaseObject item, string name)
@@ -1756,6 +1785,12 @@ namespace BatteryPulse
             if (ContainsAny(type, "cpu", "processor", "motherboard")) return false;
             if (IsCpuText(name)) return false;
             return ContainsAny(name, "nvidia", "geforce", "rtx", "gtx", "gpu", "radeon", "vega", "uhd graphics", "iris", "arc graphics", "graphics");
+        }
+
+        public static bool IsDiscreteGpuHardware(string hardwareType, string hardwareName)
+        {
+            string text = Lower((hardwareType ?? string.Empty) + " " + (hardwareName ?? string.Empty));
+            return ContainsAny(text, "nvidia", "geforce", "rtx", "gtx");
         }
 
         public static bool ShouldUseGpuTemp(string haystack, string sensorName, double candidate, BatterySnapshot data)
@@ -2025,52 +2060,67 @@ namespace BatteryPulse
         private bool initialized;
         private bool resolverAttached;
         private DateTime lastInitializeAttempt = DateTime.MinValue;
-        private DateTime lastReopenAt = DateTime.MinValue;
-        private int gpuMissReads;
+        private DateTime retryAfter = DateTime.MinValue;
+        private int consecutiveFailures;
+        private bool initializedWithGpu;
 
         public void Read(BatterySnapshot data)
         {
+            if (data == null) return;
+            if (DateTime.Now < retryAfter)
+            {
+                ClearUnpairedGpuData(data);
+                return;
+            }
+
             try
             {
-                EnsureInitialized();
+                bool enableGpu = !data.DiscreteGpuUnavailable;
+                if (computer != null && initializedWithGpu != enableGpu)
+                    InvalidateComputer();
+                EnsureInitialized(enableGpu);
                 if (computer == null)
                 {
                     ClearUnpairedGpuData(data);
                     return;
                 }
-                object hardwareList = computer.GetType().GetProperty("Hardware").GetValue(computer, null);
-                ScanHardwareList(hardwareList, data);
+                PropertyInfo hardwareProperty = computer.GetType().GetProperty("Hardware");
+                object hardwareList = hardwareProperty == null ? null : hardwareProperty.GetValue(computer, null);
+                if (hardwareList == null)
+                {
+                    ClearUnpairedGpuData(data);
+                    return;
+                }
+                ScanHardwareList(hardwareList, data, data.DiscreteGpuUnavailable);
                 SelectActiveGpu(data);
-                if (data.GpuTempC.HasValue || data.GpuUsagePercent.HasValue)
-                {
-                    gpuMissReads = 0;
-                }
-                else if (string.Equals(data.GpuStatus, "已停用", StringComparison.OrdinalIgnoreCase))
-                {
-                    gpuMissReads = 0;
-                }
-                else
-                {
-                    gpuMissReads++;
-                    if (gpuMissReads >= 20 && (DateTime.Now - lastReopenAt).TotalSeconds >= 60)
-                        ResetComputer();
-                }
+                // A missing adapter during a mode switch is expected. A
+                // successful enumeration, even with no active GPU, is not a
+                // monitor failure and should not trigger a reset.
+                consecutiveFailures = 0;
+                retryAfter = DateTime.MinValue;
             }
-            catch
+            catch (Exception ex)
             {
                 ClearUnpairedGpuData(data);
+                consecutiveFailures++;
+                retryAfter = DateTime.Now.AddSeconds(Math.Min(10, Math.Max(2, consecutiveFailures * 2)));
+                RuntimeDiagnostics.Write("GPU hardware re-enumeration", ex);
+                if (consecutiveFailures >= 3) InvalidateComputer();
             }
         }
 
         private static void ClearUnpairedGpuData(BatterySnapshot data)
         {
-            if (data == null || data.GpuUsagePercent.HasValue) return;
+            if (data == null) return;
             data.GpuName = null;
+            data.GpuUsagePercent = null;
+            data.GpuUsageSource = null;
             data.GpuTempC = null;
             data.GpuTempSource = null;
+            if (data.GpuDevices != null) data.GpuDevices.Clear();
         }
 
-        private void EnsureInitialized()
+        private void EnsureInitialized(bool enableGpu)
         {
             if (computer != null) return;
             if (initialized && (DateTime.Now - lastInitializeAttempt).TotalSeconds < 10) return;
@@ -2113,45 +2163,52 @@ namespace BatteryPulse
             if (computerType == null) return;
             computer = Activator.CreateInstance(computerType);
             SetBool(computer, "IsCpuEnabled", true);
-            SetBool(computer, "IsGpuEnabled", true);
+            SetBool(computer, "IsGpuEnabled", enableGpu);
             SetBool(computer, "IsMotherboardEnabled", true);
             SetBool(computer, "IsBatteryEnabled", true);
             computerType.GetMethod("Open").Invoke(computer, null);
+            initializedWithGpu = enableGpu;
         }
 
-        private void ResetComputer()
+        private void InvalidateComputer()
         {
-            try
-            {
-                if (computer != null)
-                {
-                    MethodInfo close = computer.GetType().GetMethod("Close");
-                    if (close != null) close.Invoke(computer, null);
-                }
-            }
-            catch { }
+            // Do not invoke LibreHardwareMonitor.Close() while a GPU driver is
+            // being switched by G Helper. Drop the managed object and rebuild
+            // it after the retry cooldown instead.
             computer = null;
+            assembly = null;
             initialized = false;
-            gpuMissReads = 0;
-            lastReopenAt = DateTime.Now;
+            initializedWithGpu = false;
         }
 
-        private void ScanHardwareList(object hardwareList, BatterySnapshot data)
+        private void ScanHardwareList(object hardwareList, BatterySnapshot data, bool skipDiscreteGpu)
         {
             System.Collections.IEnumerable items = hardwareList as System.Collections.IEnumerable;
             if (items == null) return;
-            foreach (object hardware in items) ScanHardware(hardware, data);
+            foreach (object hardware in items)
+            {
+                try
+                {
+                    ScanHardware(hardware, data, skipDiscreteGpu);
+                }
+                catch (Exception ex)
+                {
+                    RuntimeDiagnostics.Write("LibreHardwareMonitor 硬體項目", ex);
+                }
+            }
         }
 
-        private void ScanHardware(object hardware, BatterySnapshot data)
+        private void ScanHardware(object hardware, BatterySnapshot data, bool skipDiscreteGpu)
         {
             if (hardware == null) return;
-            MethodInfo update = hardware.GetType().GetMethod("Update");
-            if (update != null) update.Invoke(hardware, null);
-
             string type = PropText(hardware, "HardwareType");
             string hardwareName = PropText(hardware, "Name");
-            object sensors = hardware.GetType().GetProperty("Sensors").GetValue(hardware, null);
+            if (skipDiscreteGpu && HardwareTemperatureClassifier.IsDiscreteGpuHardware(type, hardwareName)) return;
+
+            MethodInfo update = hardware.GetType().GetMethod("Update");
+            if (update != null) update.Invoke(hardware, null);
+            PropertyInfo sensorsProperty = hardware.GetType().GetProperty("Sensors");
+            object sensors = sensorsProperty == null ? null : sensorsProperty.GetValue(hardware, null);
             System.Collections.IEnumerable sensorItems = sensors as System.Collections.IEnumerable;
             if (sensorItems != null)
             {
@@ -2159,7 +2216,8 @@ namespace BatteryPulse
             }
 
             PropertyInfo subHardwareProperty = hardware.GetType().GetProperty("SubHardware");
-            if (subHardwareProperty != null) ScanHardwareList(subHardwareProperty.GetValue(hardware, null), data);
+            if (subHardwareProperty != null)
+                ScanHardwareList(subHardwareProperty.GetValue(hardware, null), data, skipDiscreteGpu);
         }
 
         private static void ScanSensor(object sensor, string hardwareType, string hardwareName, BatterySnapshot data)
@@ -2604,6 +2662,7 @@ namespace BatteryPulse
         [STAThread]
         public static void Main(string[] args)
         {
+            RuntimeDiagnostics.AttachGlobalHandlers();
             try
             {
                 bool testInstance = (args != null && args.Any(delegate(string value) { return string.Equals(value, "--test-instance", StringComparison.OrdinalIgnoreCase); })) ||
@@ -2624,7 +2683,11 @@ namespace BatteryPulse
                     app.Run();
                 }
             }
-            catch (Exception ex) { WriteCrash(ex); }
+            catch (Exception ex)
+            {
+                RuntimeDiagnostics.Write("主程序外層例外", ex);
+                WriteCrash(ex);
+            }
         }
 
         private static void WriteCrash(Exception ex)
@@ -2641,6 +2704,20 @@ namespace BatteryPulse
     {
         private static readonly object Sync = new object();
         private static DateTime lastWrite = DateTime.MinValue;
+
+        public static void AttachGlobalHandlers()
+        {
+            AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs e)
+            {
+                Exception ex = e.ExceptionObject as Exception ?? new Exception(Convert.ToString(e.ExceptionObject, CultureInfo.InvariantCulture));
+                Write("AppDomain 未處理例外", ex);
+            };
+            TaskScheduler.UnobservedTaskException += delegate(object sender, UnobservedTaskExceptionEventArgs e)
+            {
+                Write("未觀察到的工作例外", e.Exception);
+                e.SetObserved();
+            };
+        }
 
         public static void Write(string stage, Exception ex)
         {

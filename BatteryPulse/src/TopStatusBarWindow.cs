@@ -316,11 +316,20 @@ namespace BatteryPulse
             if (data == null) return;
             if (!Dispatcher.CheckAccess())
             {
-                Dispatcher.BeginInvoke(new Action(delegate { UpdateSnapshot(data); }));
+                try
+                {
+                    Dispatcher.BeginInvoke(new Action(delegate { UpdateSnapshot(data); }));
+                }
+                catch (Exception ex)
+                {
+                    RuntimeDiagnostics.Write("排程頂端列快照", ex);
+                }
                 return;
             }
 
-            ReloadSettingsIfChanged();
+            try
+            {
+                ReloadSettingsIfChanged();
 
             bool hasChargePower = HasPositive(data.Watts);
             bool hasSystemPower = HasPositive(data.SystemWatts);
@@ -367,7 +376,12 @@ namespace BatteryPulse
             SetBlinking(chargeIcon, charging, ref chargeBlinking, 860);
             SetBlinking(powerIcon, hasSystemPower, ref powerBlinking, 980);
             ApplyLayoutVisibility();
-            shell.ToolTip = BuildSourceToolTip(data, type);
+                shell.ToolTip = BuildSourceToolTip(data, type);
+            }
+            catch (Exception ex)
+            {
+                RuntimeDiagnostics.Write("頂端狀態列套用快照", ex);
+            }
         }
 
         private static TextBlock TextCell(string text, double fontSize, FontWeight weight, string color)
@@ -635,6 +649,7 @@ namespace BatteryPulse
         [STAThread]
         public static void Main(string[] args)
         {
+            RuntimeDiagnostics.AttachGlobalHandlers();
             bool created;
             using (var mutex = new Mutex(true, "Local\\BatteryPulseTopBar", out created))
             {
@@ -670,12 +685,17 @@ namespace BatteryPulse
                         {
                             host = new BatteryWindow();
                             host.ConfigureTopBarHost(delegate { bar.ShowTopBar(); }, delegate { return bar.GetScreenWorkArea(); });
-                            host.SnapshotUpdated += delegate(BatterySnapshot data) { bar.UpdateSnapshot(data); };
+                            host.SnapshotUpdated += delegate(BatterySnapshot data)
+                            {
+                                try { bar.UpdateSnapshot(data); }
+                                catch (Exception ex) { RuntimeDiagnostics.Write("頂端列快照回呼", ex); }
+                            };
                             host.Show();
                             host.Hide();
                         }
                         catch (Exception ex)
                         {
+                            RuntimeDiagnostics.Write("頂端列初始化", ex);
                             WriteCrash(ex);
                         }
                     }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
@@ -683,6 +703,7 @@ namespace BatteryPulse
                 }
                 catch (Exception ex)
                 {
+                    RuntimeDiagnostics.Write("頂端列外層例外", ex);
                     WriteCrash(ex);
                 }
             }
