@@ -48,6 +48,7 @@ namespace BatteryPulse
         private long? previousTotal;
         private DateTime lastProcessEnergyRead = DateTime.MinValue;
         private readonly Dictionary<int, ProcessCpuSample> previousProcesses = new Dictionary<int, ProcessCpuSample>();
+        private readonly Queue<Dictionary<string, double>> processActivitySamples = new Queue<Dictionary<string, double>>();
         private List<EnergyProcessSnapshot> lastEnergyRanking = new List<EnergyProcessSnapshot>();
         private string lastEnergyRankingSource = "尚未取得足夠樣本";
 
@@ -171,11 +172,14 @@ namespace BatteryPulse
             }
 
             DateTime now = DateTime.UtcNow;
-            if ((now - lastProcessEnergyRead).TotalSeconds < 5) return;
+            if ((now - lastProcessEnergyRead).TotalSeconds < 1) return;
             double sampleSeconds = lastProcessEnergyRead == DateTime.MinValue
                 ? 0
                 : (now - lastProcessEnergyRead).TotalSeconds;
             lastProcessEnergyRead = now;
+
+            if (sampleSeconds > 2.5)
+                processActivitySamples.Clear();
 
             var currentProcesses = new Dictionary<int, ProcessCpuSample>();
             try
@@ -209,7 +213,7 @@ namespace BatteryPulse
 
             if (previousProcesses.Count > 0 && sampleSeconds > 0)
             {
-                var groupedTicks = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                var groupedUsage = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
                 foreach (KeyValuePair<int, ProcessCpuSample> current in currentProcesses)
                 {
                     ProcessCpuSample previous;
@@ -217,33 +221,66 @@ namespace BatteryPulse
                     long delta = current.Value.CpuTicks - previous.CpuTicks;
                     if (delta <= 0) continue;
 
+                    // A process can use multiple cores, but its share of total CPU capacity is capped at 100%.
+                    double usage = delta /
+                        (TimeSpan.TicksPerSecond * sampleSeconds * Math.Max(1, Environment.ProcessorCount)) * 100.0;
+                    usage = Math.Max(0, Math.Min(100, usage));
+                    if (usage <= 0) continue;
+
                     double existing;
-                    if (!groupedTicks.TryGetValue(current.Value.Name, out existing)) existing = 0;
-                    groupedTicks[current.Value.Name] = existing + delta;
+                    if (!groupedUsage.TryGetValue(current.Value.Name, out existing)) existing = 0;
+                    groupedUsage[current.Value.Name] = existing + usage;
                 }
 
-                if (groupedTicks.Count > 0)
-                {
-                    List<EnergyProcessSnapshot> ranking = groupedTicks
-                        .Select(delegate(KeyValuePair<string, double> item)
-                        {
-                            double share = item.Value /
-                                (TimeSpan.TicksPerSecond * sampleSeconds * Math.Max(1, Environment.ProcessorCount)) * 100.0;
-                            return new EnergyProcessSnapshot
-                            {
-                                Name = item.Key,
-                                CpuUsagePercent = Math.Max(0, Math.Min(100, share))
-                            };
-                        })
-                        .Where(delegate(EnergyProcessSnapshot item) { return item.CpuUsagePercent >= 0.05; })
-                        .OrderByDescending(delegate(EnergyProcessSnapshot item) { return item.CpuUsagePercent; })
-                        .Take(5)
-                        .ToList();
+                processActivitySamples.Enqueue(groupedUsage);
+                while (processActivitySamples.Count > 5)
+                    processActivitySamples.Dequeue();
 
-                    if (ranking.Count > 0)
+                // Keep the first four samples out of the ranking so the displayed proportion always represents a full 5-second window.
+                if (processActivitySamples.Count >= 5)
+                {
+                    var accumulated = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+                    foreach (Dictionary<string, double> sample in processActivitySamples)
                     {
+                        foreach (KeyValuePair<string, double> item in sample)
+                        {
+                            double existing;
+                            if (!accumulated.TryGetValue(item.Key, out existing)) existing = 0;
+                            accumulated[item.Key] = existing + item.Value;
+                        }
+                    }
+
+                    double totalActivity = accumulated.Values.Sum();
+                    if (totalActivity > 0)
+                    {
+                        List<KeyValuePair<string, double>> topItems = accumulated
+                            .OrderByDescending(delegate(KeyValuePair<string, double> item) { return item.Value; })
+                            .Take(5)
+                            .ToList();
+                        List<EnergyProcessSnapshot> ranking = topItems
+                            .Select(delegate(KeyValuePair<string, double> item)
+                            {
+                                return new EnergyProcessSnapshot
+                                {
+                                    Name = item.Key,
+                                    CpuUsagePercent = item.Value / totalActivity * 100.0
+                                };
+                            })
+                            .ToList();
+
+                        double topShare = ranking.Sum(delegate(EnergyProcessSnapshot item) { return item.CpuUsagePercent; });
+                        double otherShare = Math.Max(0, 100.0 - topShare);
+                        if (otherShare >= 0.05)
+                        {
+                            ranking.Add(new EnergyProcessSnapshot
+                            {
+                                Name = "其他",
+                                CpuUsagePercent = otherShare
+                            });
+                        }
+
                         lastEnergyRanking = ranking;
-                        lastEnergyRankingSource = "Windows Process CPU time / 全系統 CPU 使用率，每 5 秒更新";
+                        lastEnergyRankingSource = "Windows Process CPU time / 最近 5 秒每秒占用率累加；前五名按比例分配整機功耗，每 1 秒更新；GPU 不做程序級假分配";
                         data.EnergyRanking = ranking.Select(delegate(EnergyProcessSnapshot item)
                         {
                             return new EnergyProcessSnapshot
