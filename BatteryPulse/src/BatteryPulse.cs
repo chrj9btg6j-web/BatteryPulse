@@ -31,8 +31,8 @@ using Point = System.Windows.Point;
 [assembly: AssemblyDescription("Battery, power and temperature desktop dashboard")]
 [assembly: AssemblyCompany("彰化的驕傲")]
 [assembly: AssemblyCopyright("Copyright © 彰化的驕傲 2026")]
-[assembly: AssemblyVersion("2.2.1.0")]
-[assembly: AssemblyFileVersion("2.2.1.0")]
+[assembly: AssemblyVersion("2.2.2.0")]
+[assembly: AssemblyFileVersion("2.2.2.0")]
 
 namespace BatteryPulse
 {
@@ -2570,6 +2570,49 @@ namespace BatteryPulse
     {
         private const string KeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string ValueName = "BatteryPulse";
+        private const string PreferencePath = @"Software\BatteryPulse";
+        private const string FirstRunValueName = "StartupConfigured";
+
+        public static void EnsureFirstRun(string[] args)
+        {
+            if (IsTestInvocation(args)) return;
+
+            try
+            {
+                using (RegistryKey preferences = Registry.CurrentUser.CreateSubKey(PreferencePath))
+                {
+                    if (preferences == null) throw new InvalidOperationException("Startup preference key is unavailable.");
+                    if (preferences.GetValue(FirstRunValueName) != null) return;
+
+                    using (RegistryKey runKey = Registry.CurrentUser.CreateSubKey(KeyPath))
+                    {
+                        if (runKey == null) throw new InvalidOperationException("Startup registry key is unavailable.");
+                        runKey.SetValue(ValueName, StartupCommand(), RegistryValueKind.String);
+                    }
+                    preferences.SetValue(FirstRunValueName, DateTime.UtcNow.ToString("O"), RegistryValueKind.String);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Startup registration must never prevent the app from opening.
+                RuntimeDiagnostics.Write("首次設定開機啟動", ex);
+            }
+        }
+
+        private static bool IsTestInvocation(string[] args)
+        {
+            if (args != null && args.Any(delegate(string value)
+            {
+                return string.Equals(value, "--test-instance", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(value, "--no-startup", StringComparison.OrdinalIgnoreCase);
+            })) return true;
+            return Assembly.GetExecutingAssembly().Location.EndsWith(".test.exe", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string StartupCommand()
+        {
+            return "\"" + Assembly.GetExecutingAssembly().Location + "\"";
+        }
 
         public static bool IsEnabled()
         {
@@ -2579,13 +2622,19 @@ namespace BatteryPulse
 
         public static void Set(bool enabled)
         {
-            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(KeyPath, true))
+            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(KeyPath))
             {
                 if (key == null) throw new InvalidOperationException("Startup registry key is unavailable.");
                 if (enabled)
-                    key.SetValue(ValueName, "\"" + Assembly.GetExecutingAssembly().Location + "\"");
+                    key.SetValue(ValueName, StartupCommand(), RegistryValueKind.String);
                 else
                     key.DeleteValue(ValueName, false);
+            }
+            using (RegistryKey preferences = Registry.CurrentUser.CreateSubKey(PreferencePath))
+            {
+                if (preferences == null) throw new InvalidOperationException("Startup preference key is unavailable.");
+                // A manual toggle is an explicit user decision, including OFF.
+                preferences.SetValue(FirstRunValueName, DateTime.UtcNow.ToString("O"), RegistryValueKind.String);
             }
         }
     }
@@ -2667,6 +2716,7 @@ namespace BatteryPulse
             {
                 bool testInstance = (args != null && args.Any(delegate(string value) { return string.Equals(value, "--test-instance", StringComparison.OrdinalIgnoreCase); })) ||
                     Assembly.GetExecutingAssembly().Location.EndsWith(".test.exe", StringComparison.OrdinalIgnoreCase);
+                StartupManager.EnsureFirstRun(args);
                 bool created;
                 using (var mutex = new Mutex(true, testInstance ? "Local\\BatteryPulseWidgetTest" : "Local\\BatteryPulseWidget", out created))
                 {

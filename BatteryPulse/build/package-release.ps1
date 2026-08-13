@@ -1,14 +1,21 @@
 param(
-    [string]$Version = '2.2.1',
+    [string]$Version = '2.2.2',
     [string]$Date = (Get-Date -Format 'yyyy-MM-dd'),
-    [string]$InstallerPath = ''
+    [string]$InstallerPath = '',
+    [string]$UpdateNotePath = '',
+    [string]$BuildDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
 # Create an immutable, date-stamped release snapshot from dist/current.
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$currentDir = Join-Path $projectRoot 'dist\current'
+$currentDir = $BuildDir
+if ([string]::IsNullOrWhiteSpace($currentDir)) {
+    $currentDir = Join-Path $projectRoot 'dist\current'
+} elseif (-not [System.IO.Path]::IsPathRooted($currentDir)) {
+    $currentDir = Join-Path $projectRoot $currentDir
+}
 $releaseRoot = Join-Path $projectRoot ("releases\{0}\v{1}" -f $Date, $Version)
 $binDir = Join-Path $releaseRoot 'bin'
 $installerDir = Join-Path $releaseRoot 'installer'
@@ -47,7 +54,12 @@ if (-not [string]::IsNullOrWhiteSpace($InstallerPath)) {
     Copy-Item -LiteralPath $InstallerPath -Destination (Join-Path $installerDir $installerName)
 }
 
-$updatePath = Join-Path $projectRoot ("docs\updates\{0}\{1}.md" -f $Date.Substring(0, 4), $Date)
+$updatePath = $UpdateNotePath
+if ([string]::IsNullOrWhiteSpace($updatePath)) {
+    $updatePath = Join-Path $projectRoot ("docs\updates\{0}\{1}.md" -f $Date.Substring(0, 4), $Date)
+} elseif (-not [System.IO.Path]::IsPathRooted($updatePath)) {
+    $updatePath = Join-Path $projectRoot $updatePath
+}
 if (Test-Path -LiteralPath $updatePath) {
     Copy-Item -LiteralPath $updatePath -Destination (Join-Path $releaseRoot 'UPDATE.md')
 }

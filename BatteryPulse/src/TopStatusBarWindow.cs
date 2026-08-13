@@ -650,6 +650,7 @@ namespace BatteryPulse
         public static void Main(string[] args)
         {
             RuntimeDiagnostics.AttachGlobalHandlers();
+            StartupManager.EnsureFirstRun(args);
             bool created;
             using (var mutex = new Mutex(true, "Local\\BatteryPulseTopBar", out created))
             {
