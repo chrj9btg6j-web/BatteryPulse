@@ -21,8 +21,8 @@
 ; TODO: 請替換成正式產品名稱；此名稱會同時用於安裝資料夾與捷徑。
 #define MyAppName "筆電狀態快顯"
 ; TODO: 每次發佈新版時更新這兩個版本號。
-#define MyAppVersion "2.2.2"
-#define MyAppVersionInfo "2.2.2.0"
+#define MyAppVersion "2.2.3"
+#define MyAppVersionInfo "2.2.3.0"
 ; TODO: 請替換成正式公司或作者名稱。
 #define MyAppPublisher "彰化的驕傲 / 陳昀"
 ; TODO: 若主執行檔改名，請同步修改這裡。
