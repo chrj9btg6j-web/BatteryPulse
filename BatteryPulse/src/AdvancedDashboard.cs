@@ -517,7 +517,7 @@ namespace BatteryPulse
             });
             var ratioHeader = new TextBlock
             {
-                Text = "占比 / 約瓦數",
+                Text = "CPU 使用率",
                 Foreground = B("#FF6D757D"),
                 FontSize = 10.5,
                 FontWeight = FontWeights.SemiBold,
@@ -1296,19 +1296,11 @@ namespace BatteryPulse
             int rank = 1;
             foreach (EnergyProcessSnapshot item in data.EnergyRanking)
             {
-                double share = Math.Max(0, Math.Min(100, item.CpuUsagePercent));
-                string value = share.ToString("0.0", CultureInfo.InvariantCulture) + "%";
-                if (data.SystemWatts.HasValue && data.SystemWatts.Value > 0)
-                {
-                    double estimatedWatts = data.SystemWatts.Value * share / 100.0;
-                    value += " · 約 " + estimatedWatts.ToString("0.0", CultureInfo.InvariantCulture) + " W";
-                }
-                energyRankingList.Children.Add(EnergyRankingRow(rank, item.Name, value));
+                string percentage = Math.Max(0, item.CpuUsagePercent).ToString("0.0", CultureInfo.InvariantCulture) + "%";
+                energyRankingList.Children.Add(EnergyRankingRow(rank, item.Name, percentage));
                 rank++;
             }
-            energyRankingSource.Text = string.IsNullOrWhiteSpace(data.EnergyRankingSource)
-                ? "最近 5 秒累加程序 CPU 活動；瓦數為整機功耗按比例估算"
-                : data.EnergyRankingSource;
+            energyRankingSource.Text = "顯示各程序占全機 CPU 的使用率；不換算程序瓦數，每 5 秒更新";
         }
 
         private static Border EnergyRankingRow(int rank, string processName, string value)

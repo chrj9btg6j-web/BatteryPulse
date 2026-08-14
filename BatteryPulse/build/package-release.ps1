@@ -1,5 +1,5 @@
 param(
-    [string]$Version = '2.2.4',
+    [string]$Version = '2.2.3',
     [string]$Date = (Get-Date -Format 'yyyy-MM-dd'),
     [string]$InstallerPath = '',
     [string]$UpdateNotePath = '',
