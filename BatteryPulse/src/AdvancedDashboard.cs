@@ -33,12 +33,12 @@ namespace BatteryPulse
         private readonly string[] pageSubtitles =
         {
             "目前電量、供電狀態與需要留意的狀態",
-            "供電、電池狀態、程序活動與功率變化",
+            "供電、電池狀態、耗能排行與功率變化",
             "CPU、GPU 與儲存裝置感測來源",
             "最近 30 分鐘的功率與溫度變化",
             "每日一份資料，系統內保留最近七天",
             "只在狀態持續或確實需要處理時提醒",
-            "警示門檻與程式偏好"
+            "USB-PD 參考值、警示門檻與程式偏好"
         };
 
         public Grid Root { get; private set; }
@@ -112,6 +112,7 @@ namespace BatteryPulse
         private ToggleSwitch alertsToggle;
         private ToggleSwitch topmostToggle;
         private ToggleSwitch startupToggle;
+        private NumericStepper pdStepper;
         private NumericStepper cpuStepper;
         private NumericStepper gpuStepper;
         private BatterySnapshot latest;
@@ -473,17 +474,14 @@ namespace BatteryPulse
         {
             StackPanel body = PageBody();
             body.Children.Add(SectionLabel("供電狀態"));
-            var row = new WrapPanel { Margin = new Thickness(0, 0, 0, 22) };
+            var row = MetricGrid(4);
             row.Children.Add(MetricTile("pd_status", "電源狀態", "#FF67D9B7"));
-            row.Children.Add(MetricTile("adapter_input", "充電器即時輸入", "#FF9AA5AD"));
-            row.Children.Add(MetricTile("battery_net", "電池淨流向", "#FF67D9B7"));
-            row.Children.Add(MetricTile("system_power", "整機功耗", "#FF6FC4F2"));
-            row.Children.Add(MetricTile("cpu_power", "CPU 功耗", "#FFFFC66D"));
-            row.Children.Add(MetricTile("gpu_power", "作用中 GPU 功耗", "#FFC6A0FF"));
-            row.Children.Add(MetricTile("charger_type", "充電器類型", "#FF9AA5AD"));
+            row.Children.Add(MetricTile("pd_input", "電腦耗電", "#FF6FC4F2"));
+            row.Children.Add(MetricTile("pd_margin", "充電器類型", "#FFFFC66D"));
+            row.Children.Add(MetricTile("battery_flow", "電池流向", "#FFC6A0FF"));
             body.Children.Add(row);
 
-            body.Children.Add(SectionLabel("程序活動排行"));
+            body.Children.Add(SectionLabel("耗能排行"));
             body.Children.Add(BuildEnergyRankingBand());
 
             body.Children.Add(SectionLabel("功率變化"));
@@ -517,7 +515,7 @@ namespace BatteryPulse
             });
             var ratioHeader = new TextBlock
             {
-                Text = "CPU 使用率",
+                Text = "耗能比例",
                 Foreground = B("#FF6D757D"),
                 FontSize = 10.5,
                 FontWeight = FontWeights.SemiBold,
@@ -1016,6 +1014,9 @@ namespace BatteryPulse
         {
             StackPanel body = PageBody();
             body.Children.Add(SectionLabel("供電與溫度"));
+            pdStepper = new NumericStepper(settings.PdWatts, 20, 240, 5, " W");
+            pdStepper.ValueChanged += delegate(double value) { settings.PdWatts = value; settings.Save(); RefreshFromLatest(); };
+            body.Children.Add(SettingRow("USB-PD 參考功率", "僅在未取得 PD 協議功率時作比較，不代表實際輸入", pdStepper.Root));
             cpuStepper = new NumericStepper(settings.CpuWarnC, 60, 100, 1, " °C");
             cpuStepper.ValueChanged += delegate(double value) { settings.CpuWarnC = value; settings.Save(); RefreshFromLatest(); };
             body.Children.Add(SettingRow("CPU 警示溫度", "持續超過此溫度才會列入智慧警示", cpuStepper.Root));
@@ -1077,14 +1078,9 @@ namespace BatteryPulse
             }
             if (overviewChargeValue != null)
             {
-                bool chargingFlow = data.Watts.HasValue && data.Watts.Value > 0 &&
-                    string.Equals(data.BatteryPowerMode, "充電", StringComparison.OrdinalIgnoreCase);
-                bool dischargingFlow = data.Watts.HasValue && data.Watts.Value > 0 &&
-                    string.Equals(data.BatteryPowerMode, "放電", StringComparison.OrdinalIgnoreCase);
-                overviewChargeValue.Text = chargingFlow || dischargingFlow
-                    ? (chargingFlow ? "+" : "−") + data.Watts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W"
-                    : "--";
-                overviewChargeNote.Text = chargingFlow ? "充入電池" : (dischargingFlow ? "電池輸出" : "--");
+                bool hasCharge = data.IsCharging && data.Watts.HasValue && data.Watts.Value > 0;
+                overviewChargeValue.Text = hasCharge ? FormatValue(data.Watts, "0.0", " W") : "--";
+                overviewChargeNote.Text = hasCharge ? "電池吸收" : "--";
             }
             if (overviewSystemValue != null)
             {
@@ -1185,15 +1181,11 @@ namespace BatteryPulse
             double? computerWatts = data.SystemWatts.HasValue && data.SystemWatts.Value > 0
                 ? data.SystemWatts
                 : (double?)null;
-            double? adapterInputWatts = data.AdapterInputWatts.HasValue && data.AdapterInputWatts.Value > 0
-                ? data.AdapterInputWatts
+            double? chargeWatts = data.IsCharging && data.Watts.HasValue && data.Watts.Value > 0
+                ? data.Watts
                 : (double?)null;
-            bool chargingFlow = data.Watts.HasValue && data.Watts.Value > 0 &&
-                string.Equals(data.BatteryPowerMode, "充電", StringComparison.OrdinalIgnoreCase);
-            bool dischargingFlow = data.Watts.HasValue && data.Watts.Value > 0 &&
+            bool supplement = data.IsAcLine && data.Watts.HasValue && data.Watts.Value > 1 &&
                 string.Equals(data.BatteryPowerMode, "放電", StringComparison.OrdinalIgnoreCase);
-            double? batteryFlowWatts = chargingFlow || dischargingFlow ? data.Watts : (double?)null;
-            bool supplement = data.IsAcLine && dischargingFlow;
 
             string status;
             string note;
@@ -1219,57 +1211,30 @@ namespace BatteryPulse
             }
 
             SetMetric("pd_status", status, note);
-            SetMetric("adapter_input", FormatValue(adapterInputWatts, "0.0", " W"), TextOrUnknown(data.AdapterInputPowerSource));
-            SetMetricVisibility("adapter_input", adapterInputWatts.HasValue);
-
-            string batteryFlowValue = batteryFlowWatts.HasValue
-                ? (chargingFlow ? "+" : "−") + batteryFlowWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W"
-                : "--";
-            string batteryFlowNote = batteryFlowWatts.HasValue
-                ? (chargingFlow ? "充入電池" : "電池輸出") + " · " + TextOrUnknown(data.BatteryPowerSource)
-                : "--";
-            SetMetric("battery_net", batteryFlowValue, batteryFlowNote);
-            SetMetricVisibility("battery_net", batteryFlowWatts.HasValue);
-
-            SetMetric("system_power", FormatValue(computerWatts, "0.0", " W"), TextOrUnknown(data.SystemWattsSource));
-            SetMetricVisibility("system_power", computerWatts.HasValue);
-
-            double? cpuWatts = data.CpuPowerWatts.HasValue && data.CpuPowerWatts.Value > 0 ? data.CpuPowerWatts : (double?)null;
-            SetMetric("cpu_power", FormatValue(cpuWatts, "0.0", " W"), TextOrUnknown(data.CpuPowerSource));
-            SetMetricVisibility("cpu_power", cpuWatts.HasValue);
-
-            double? gpuWatts = data.GpuPowerWatts.HasValue && data.GpuPowerWatts.Value > 0 ? data.GpuPowerWatts : (double?)null;
-            string gpuPowerNote = gpuWatts.HasValue
-                ? TextOrUnknown(data.GpuName) + " · " + TextOrUnknown(data.GpuPowerSource)
-                : "--";
-            SetMetric("gpu_power", FormatValue(gpuWatts, "0.0", " W"), gpuPowerNote);
-            SetMetricVisibility("gpu_power", gpuWatts.HasValue);
+            SetMetric("pd_input", FormatValue(computerWatts, "0.0", " W"),
+                computerWatts.HasValue ? data.SystemWattsSource : "--");
 
             string chargerType = RecognizedChargerType(data);
             string chargerTypeSource = chargerType == "--" ? "--" : TextOrUnknown(data.ChargerTypeSource);
-            SetMetric("charger_type", chargerType, chargerTypeSource);
-            SetMetricVisibility("charger_type", chargerType != "--");
+            SetMetric("pd_margin", chargerType, chargerTypeSource);
+
+            string flow = data.Watts.HasValue && data.Watts.Value > 0
+                ? (string.IsNullOrEmpty(data.BatteryPowerMode) ? "電池" : data.BatteryPowerMode) + " " + data.Watts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W"
+                : "--";
+            SetMetric("battery_flow", flow, data.IsAcLine ? "外接電源" : "電池供電");
 
             string detail = status + "\n" + note;
-            if (adapterInputWatts.HasValue)
-                detail += "\n充電器即時輸入 " + adapterInputWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
             if (computerWatts.HasValue)
-                detail += "\n整機功耗 " + computerWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
-            if (batteryFlowWatts.HasValue)
-                detail += " · 電池" + (chargingFlow ? "充入 " : "輸出 ") + batteryFlowWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
-            if (cpuWatts.HasValue)
-                detail += "\nCPU " + cpuWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
-            if (gpuWatts.HasValue)
-                detail += " · " + TextOrUnknown(data.GpuName) + " " + gpuWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
+                detail += "\n電腦耗電 " + computerWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
+            if (chargeWatts.HasValue)
+                detail += " · 電池吸收 " + chargeWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
             if (chargerType != "--")
                 detail += "\n充電器 " + chargerType;
             pdDetailText.Text = detail;
 
-            powerSourceText.Text = "充電器即時輸入：" + (adapterInputWatts.HasValue ? TextOrUnknown(data.AdapterInputPowerSource) : "未提供，不以其他數值推算") + "\n" +
-                "電池淨流向：" + (batteryFlowWatts.HasValue ? TextOrUnknown(data.BatteryPowerSource) : "未提供") + "\n" +
-                "整機功耗：" + (computerWatts.HasValue ? data.SystemWattsSource : "未提供") + "\n" +
-                "CPU 功耗：" + (cpuWatts.HasValue ? data.CpuPowerSource : "未提供") + "\n" +
-                "作用中 GPU 功耗：" + (gpuWatts.HasValue ? data.GpuPowerSource : "未提供") +
+            powerSourceText.Text = "電腦耗電：" + (computerWatts.HasValue ? data.SystemWattsSource : "--") + "\n" +
+                "電池流向：Windows BatteryStatus / ChargeRate\n" +
+                "充電瓦數：Windows BatteryStatus / ChargeRate" +
                 (chargerType == "--" ? "\n充電器類型：--" : "\n充電器類型：" + chargerType + " · " + chargerTypeSource);
         }
 
@@ -1296,11 +1261,13 @@ namespace BatteryPulse
             int rank = 1;
             foreach (EnergyProcessSnapshot item in data.EnergyRanking)
             {
-                string percentage = Math.Max(0, item.CpuUsagePercent).ToString("0.0", CultureInfo.InvariantCulture) + "%";
+                string percentage = Math.Max(0, item.SharePercent).ToString("0", CultureInfo.InvariantCulture) + "%";
+                if (item.EstimatedWatts.HasValue)
+                    percentage += " · 約 " + item.EstimatedWatts.Value.ToString("0.0", CultureInfo.InvariantCulture) + " W";
                 energyRankingList.Children.Add(EnergyRankingRow(rank, item.Name, percentage));
                 rank++;
             }
-            energyRankingSource.Text = "顯示各程序占全機 CPU 的使用率；不換算程序瓦數，每 5 秒更新";
+            energyRankingSource.Text = "比例依程序 CPU 時間估算；瓦數依系統耗電分配，每 5 秒更新";
         }
 
         private static Border EnergyRankingRow(int rank, string processName, string value)
@@ -1595,6 +1562,7 @@ namespace BatteryPulse
 
         private void UpdateSettingsControls()
         {
+            if (pdStepper != null) pdStepper.SetValue(settings.PdWatts, false);
             if (cpuStepper != null) cpuStepper.SetValue(settings.CpuWarnC, false);
             if (gpuStepper != null) gpuStepper.SetValue(settings.GpuWarnC, false);
             if (alertsToggle != null) alertsToggle.SetState(settings.AlertsEnabled, false);
@@ -1838,7 +1806,7 @@ namespace BatteryPulse
             Grid.SetRow(note, 2);
             grid.Children.Add(note);
             root.Child = grid;
-            RegisterMetric(key, new MetricView(root, value, note));
+            RegisterMetric(key, new MetricView(value, note));
             root.MouseEnter += delegate { root.Background = B("#22FFFFFF"); };
             root.MouseLeave += delegate { root.Background = B("#17FFFFFF"); };
             return root;
@@ -1889,9 +1857,9 @@ namespace BatteryPulse
             for (int i = 0; i < 3; i++)
                 content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-            var systemHeading = OverviewHeading("整機功耗", "#FF9AA5AD");
+            var systemHeading = OverviewHeading("電腦耗電", "#FF9AA5AD");
             content.Children.Add(systemHeading);
-            var chargeHeading = OverviewHeading("電池淨流向", "#FF9AA5AD");
+            var chargeHeading = OverviewHeading("電池吸收", "#FF9AA5AD");
             Grid.SetColumn(chargeHeading, 1);
             content.Children.Add(chargeHeading);
 
@@ -2191,14 +2159,6 @@ namespace BatteryPulse
             }
         }
 
-        private void SetMetricVisibility(string key, bool visible)
-        {
-            List<MetricView> list;
-            if (!metrics.TryGetValue(key, out list)) return;
-            foreach (MetricView view in list)
-                view.Root.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
-        }
-
         private static StackPanel PageBody()
         {
             return new StackPanel { Margin = new Thickness(0, 0, 9, 18) };
@@ -2338,7 +2298,7 @@ namespace BatteryPulse
             var legend = new StackPanel { Orientation = Orientation.Horizontal };
             if (showFullLegend || chart.Mode == TelemetryChartMode.Power || chart.Mode == TelemetryChartMode.PowerAndBattery)
             {
-                legend.Children.Add(Legend("整機功耗 (W)", "#FF41556B", DashStyles.Solid));
+                legend.Children.Add(Legend("電腦耗電 (W)", "#FF41556B", DashStyles.Solid));
                 legend.Children.Add(Legend("電池充放電功率 (W)", "#FFD97706", DashStyles.Solid));
             }
             if (showFullLegend || chart.Mode == TelemetryChartMode.Temperature)
@@ -2779,15 +2739,9 @@ namespace BatteryPulse
 
         private sealed class MetricView
         {
-            public readonly FrameworkElement Root;
             public readonly TextBlock Value;
             public readonly TextBlock Note;
-            public MetricView(FrameworkElement root, TextBlock value, TextBlock note)
-            {
-                Root = root;
-                Value = value;
-                Note = note;
-            }
+            public MetricView(TextBlock value, TextBlock note) { Value = value; Note = note; }
         }
 
         private sealed class DashboardAlert
