@@ -8,6 +8,7 @@ using System.Linq;
 using System.Management;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,8 +32,8 @@ using Point = System.Windows.Point;
 [assembly: AssemblyDescription("Battery, power and temperature desktop dashboard")]
 [assembly: AssemblyCompany("彰化的驕傲")]
 [assembly: AssemblyCopyright("Copyright © 彰化的驕傲 2026")]
-[assembly: AssemblyVersion("2.2.2.0")]
-[assembly: AssemblyFileVersion("2.2.2.0")]
+[assembly: AssemblyVersion("2.2.2.1")]
+[assembly: AssemblyFileVersion("2.2.2.1")]
 
 namespace BatteryPulse
 {
@@ -2055,18 +2056,31 @@ namespace BatteryPulse
 
     public sealed class LhmReader
     {
+        private const int StartupMonitorDelaySeconds = 20;
+        private const int StartupGpuDelaySeconds = 40;
         private object computer;
         private Assembly assembly;
         private bool initialized;
         private bool resolverAttached;
+        private bool startupScheduleInitialized;
+        private DateTime monitorReadyAt = DateTime.MinValue;
+        private DateTime gpuReadyAt = DateTime.MinValue;
         private DateTime lastInitializeAttempt = DateTime.MinValue;
         private DateTime retryAfter = DateTime.MinValue;
+        private DateTime disabledUntil = DateTime.MinValue;
         private int consecutiveFailures;
         private bool initializedWithGpu;
 
+        [HandleProcessCorruptedStateExceptions]
         public void Read(BatterySnapshot data)
         {
             if (data == null) return;
+            EnsureStartupSchedule();
+            if (DateTime.Now < monitorReadyAt || DateTime.Now < disabledUntil)
+            {
+                ClearUnpairedGpuData(data);
+                return;
+            }
             if (DateTime.Now < retryAfter)
             {
                 ClearUnpairedGpuData(data);
@@ -2075,7 +2089,7 @@ namespace BatteryPulse
 
             try
             {
-                bool enableGpu = !data.DiscreteGpuUnavailable;
+                bool enableGpu = DateTime.Now >= gpuReadyAt && !data.DiscreteGpuUnavailable;
                 if (computer != null && initializedWithGpu != enableGpu)
                     InvalidateComputer();
                 EnsureInitialized(enableGpu);
@@ -2099,6 +2113,18 @@ namespace BatteryPulse
                 consecutiveFailures = 0;
                 retryAfter = DateTime.MinValue;
             }
+            catch (AccessViolationException ex)
+            {
+                // LibreHardwareMonitor can touch a driver while Windows or G-Helper
+                // is still changing GPU power state. Keep the app alive and pause the
+                // optional reader; the next refresh cycle can retry after the cooldown.
+                ClearUnpairedGpuData(data);
+                consecutiveFailures++;
+                disabledUntil = DateTime.Now.AddMinutes(2);
+                retryAfter = disabledUntil;
+                InvalidateComputer();
+                RuntimeDiagnostics.Write("LibreHardwareMonitor 記憶體存取例外，已暫停重試", ex);
+            }
             catch (Exception ex)
             {
                 ClearUnpairedGpuData(data);
@@ -2107,6 +2133,15 @@ namespace BatteryPulse
                 RuntimeDiagnostics.Write("GPU hardware re-enumeration", ex);
                 if (consecutiveFailures >= 3) InvalidateComputer();
             }
+        }
+
+        private void EnsureStartupSchedule()
+        {
+            if (startupScheduleInitialized) return;
+            startupScheduleInitialized = true;
+            DateTime now = DateTime.Now;
+            monitorReadyAt = now.AddSeconds(StartupMonitorDelaySeconds);
+            gpuReadyAt = now.AddSeconds(StartupGpuDelaySeconds);
         }
 
         private static void ClearUnpairedGpuData(BatterySnapshot data)
@@ -2569,9 +2604,11 @@ namespace BatteryPulse
     public static class StartupManager
     {
         private const string KeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        private const string ValueName = "BatteryPulse";
+        private const string LegacyValueName = "BatteryPulse";
+        private const string TopBarValueName = "BatteryPulse.TopBar";
         private const string PreferencePath = @"Software\BatteryPulse";
         private const string FirstRunValueName = "StartupConfigured";
+        private const string EnabledValueName = "StartupEnabled";
 
         public static void EnsureFirstRun(string[] args)
         {
@@ -2579,16 +2616,32 @@ namespace BatteryPulse
 
             try
             {
+                string command = StartupCommand();
                 using (RegistryKey preferences = Registry.CurrentUser.CreateSubKey(PreferencePath))
                 {
                     if (preferences == null) throw new InvalidOperationException("Startup preference key is unavailable.");
-                    if (preferences.GetValue(FirstRunValueName) != null) return;
+
+                    bool? userChoice = ReadUserChoice(preferences);
+                    if (userChoice.HasValue && !userChoice.Value)
+                    {
+                        DeleteStartupValue(CurrentValueName);
+                        if (IsTopBarExecutable()) DeleteStartupValue(LegacyValueName);
+                        return;
+                    }
 
                     using (RegistryKey runKey = Registry.CurrentUser.CreateSubKey(KeyPath))
                     {
                         if (runKey == null) throw new InvalidOperationException("Startup registry key is unavailable.");
-                        runKey.SetValue(ValueName, StartupCommand(), RegistryValueKind.String);
+                        object existing = runKey.GetValue(CurrentValueName);
+                        if (!string.Equals(Convert.ToString(existing, CultureInfo.InvariantCulture), command, StringComparison.Ordinal))
+                            runKey.SetValue(CurrentValueName, command, RegistryValueKind.String);
+
+                        // The top-bar build is the supported startup entry. Do not let an older
+                        // standalone widget launch beside it after an update or rollback.
+                        if (IsTopBarExecutable()) runKey.DeleteValue(LegacyValueName, false);
                     }
+
+                    preferences.SetValue(EnabledValueName, 1, RegistryValueKind.DWord);
                     preferences.SetValue(FirstRunValueName, DateTime.UtcNow.ToString("O"), RegistryValueKind.String);
                 }
             }
@@ -2614,10 +2667,49 @@ namespace BatteryPulse
             return "\"" + Assembly.GetExecutingAssembly().Location + "\"";
         }
 
+        private static bool IsTopBarExecutable()
+        {
+            string fileName = Path.GetFileName(Assembly.GetExecutingAssembly().Location) ?? string.Empty;
+            return fileName.IndexOf("BatteryPulse.TopBar", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string CurrentValueName
+        {
+            get { return IsTopBarExecutable() ? TopBarValueName : LegacyValueName; }
+        }
+
+        private static bool? ReadUserChoice(RegistryKey preferences)
+        {
+            object value = preferences.GetValue(EnabledValueName);
+            if (value == null) return null;
+
+            if (value is int) return (int)value != 0;
+            bool parsedBoolean;
+            if (bool.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), out parsedBoolean))
+                return parsedBoolean;
+
+            int parsedNumber;
+            if (int.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture, out parsedNumber))
+                return parsedNumber != 0;
+            return null;
+        }
+
+        private static void DeleteStartupValue(string valueName)
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(KeyPath, true))
+            {
+                if (key != null) key.DeleteValue(valueName, false);
+            }
+        }
+
         public static bool IsEnabled()
         {
             using (RegistryKey key = Registry.CurrentUser.OpenSubKey(KeyPath, false))
-                return key != null && key.GetValue(ValueName) != null;
+            {
+                if (key == null) return false;
+                string configured = Convert.ToString(key.GetValue(CurrentValueName), CultureInfo.InvariantCulture);
+                return string.Equals(configured, StartupCommand(), StringComparison.Ordinal);
+            }
         }
 
         public static void Set(bool enabled)
@@ -2626,13 +2718,17 @@ namespace BatteryPulse
             {
                 if (key == null) throw new InvalidOperationException("Startup registry key is unavailable.");
                 if (enabled)
-                    key.SetValue(ValueName, StartupCommand(), RegistryValueKind.String);
+                {
+                    key.SetValue(CurrentValueName, StartupCommand(), RegistryValueKind.String);
+                    if (IsTopBarExecutable()) key.DeleteValue(LegacyValueName, false);
+                }
                 else
-                    key.DeleteValue(ValueName, false);
+                    key.DeleteValue(CurrentValueName, false);
             }
             using (RegistryKey preferences = Registry.CurrentUser.CreateSubKey(PreferencePath))
             {
                 if (preferences == null) throw new InvalidOperationException("Startup preference key is unavailable.");
+                preferences.SetValue(EnabledValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
                 // A manual toggle is an explicit user decision, including OFF.
                 preferences.SetValue(FirstRunValueName, DateTime.UtcNow.ToString("O"), RegistryValueKind.String);
             }

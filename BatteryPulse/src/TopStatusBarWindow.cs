@@ -51,6 +51,24 @@ namespace BatteryPulse
         private bool powerBlinking;
         private Action openAdvanced;
         private Rect lastScreenWorkArea = SystemParameters.WorkArea;
+        private readonly System.Windows.Threading.DispatcherTimer visibilityGuard;
+        private bool closed;
+
+        private static readonly IntPtr HwndTopmost = new IntPtr(-1);
+        private const uint SwpNoSize = 0x0001;
+        private const uint SwpNoMove = 0x0002;
+        private const uint SwpNoActivate = 0x0010;
+        private const uint SwpShowWindow = 0x0040;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(
+            IntPtr hWnd,
+            IntPtr hWndInsertAfter,
+            int x,
+            int y,
+            int cx,
+            int cy,
+            uint flags);
 
         public TopStatusBarWindow()
         {
@@ -182,11 +200,25 @@ namespace BatteryPulse
                 OpenAdvanced();
             };
 
+            visibilityGuard = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(2)
+            };
+            visibilityGuard.Tick += delegate { EnsureVisibleIfNeeded(); };
+
             Loaded += delegate
             {
                 PlaceAtTopCenter();
+                EnsureNativeVisibility();
+                visibilityGuard.Start();
                 Opacity = 0;
                 BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)));
+            };
+            SourceInitialized += delegate { EnsureNativeVisibility(); };
+            Closed += delegate
+            {
+                closed = true;
+                visibilityGuard.Stop();
             };
         }
 
@@ -296,14 +328,83 @@ namespace BatteryPulse
 
         public void ShowTopBar()
         {
-            PlaceAtTopCenter();
-            Show();
-            Opacity = 1;
+            EnsureVisible(true);
+        }
+
+        public void EnsureVisible()
+        {
+            EnsureVisible(false);
+        }
+
+        private void EnsureVisible(bool reposition)
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                try { Dispatcher.BeginInvoke(new Action(delegate { EnsureVisible(reposition); })); }
+                catch (Exception ex) { RuntimeDiagnostics.Write("排程頂端列顯示恢復", ex); }
+                return;
+            }
+
+            if (closed) return;
+            try
+            {
+                if (reposition || !IsVisible || Visibility != Visibility.Visible || WindowState == WindowState.Minimized)
+                    PlaceAtTopCenter();
+                if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+                if (!IsVisible) Show();
+                Visibility = Visibility.Visible;
+                BeginAnimation(OpacityProperty, null);
+                Opacity = 1;
+                EnsureNativeVisibility();
+            }
+            catch (Exception ex)
+            {
+                RuntimeDiagnostics.Write("恢復頂端列顯示", ex);
+            }
+        }
+
+        private void EnsureVisibleIfNeeded()
+        {
+            if (closed || !IsLoaded) return;
+            try
+            {
+                if (!IsVisible || Visibility != Visibility.Visible || WindowState == WindowState.Minimized)
+                    EnsureVisible(true);
+                else
+                    EnsureNativeVisibility();
+            }
+            catch (Exception ex)
+            {
+                RuntimeDiagnostics.Write("頂端列可見性巡檢", ex);
+            }
+        }
+
+        private void EnsureNativeVisibility()
+        {
+            if (!IsLoaded || closed) return;
+            try
+            {
+                Topmost = true;
+                IntPtr handle = new WindowInteropHelper(this).Handle;
+                if (handle == IntPtr.Zero) return;
+                SetWindowPos(
+                    handle,
+                    HwndTopmost,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SwpNoMove | SwpNoSize | SwpNoActivate | SwpShowWindow);
+            }
+            catch (Exception ex)
+            {
+                RuntimeDiagnostics.Write("恢復頂端列 Z 序", ex);
+            }
         }
 
         public void Reposition()
         {
-            PlaceAtTopCenter();
+            EnsureVisible(true);
         }
 
         internal Rect GetScreenWorkArea()
@@ -646,6 +747,8 @@ namespace BatteryPulse
 
     public static class TopBarProgram
     {
+        private const string ShowSignalName = "Local\\BatteryPulseTopBarShow";
+
         [STAThread]
         public static void Main(string[] args)
         {
@@ -654,7 +757,11 @@ namespace BatteryPulse
             bool created;
             using (var mutex = new Mutex(true, "Local\\BatteryPulseTopBar", out created))
             {
-                if (!created) return;
+                if (!created)
+                {
+                    SignalExistingInstance();
+                    return;
+                }
 
                 try
                 {
@@ -667,15 +774,48 @@ namespace BatteryPulse
 
                     var bar = new TopStatusBarWindow();
                     BatteryWindow host = null;
+                    TopBarTrayIcon tray = null;
+                    int stopSignalThread = 0;
+                    var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowSignalName);
+                    var signalThread = new Thread(new ThreadStart(delegate
+                    {
+                        while (Interlocked.CompareExchange(ref stopSignalThread, 0, 0) == 0)
+                        {
+                            try
+                            {
+                                showSignal.WaitOne();
+                                if (Interlocked.CompareExchange(ref stopSignalThread, 0, 0) != 0) break;
+                                app.Dispatcher.BeginInvoke(new Action(delegate { bar.EnsureVisible(); }));
+                            }
+                            catch { break; }
+                        }
+                    }))
+                    {
+                        IsBackground = true,
+                        Name = "BatteryPulse TopBar visibility recovery"
+                    };
+                    signalThread.Start();
                     bar.SetOpenAdvancedAction(delegate
                     {
                         if (host != null) host.OpenAdvancedDashboard();
                     });
                     bar.Closed += delegate
                     {
+                        Interlocked.Exchange(ref stopSignalThread, 1);
+                        try { showSignal.Set(); } catch { }
+                        try { if (tray != null) tray.Dispose(); } catch { }
                         if (host != null) host.ShutdownTopBarHost();
                         app.Shutdown();
                     };
+
+                    tray = new TopBarTrayIcon(
+                        delegate { bar.EnsureVisible(); },
+                        delegate
+                        {
+                            if (host != null) host.OpenAdvancedDashboard();
+                            else bar.EnsureVisible();
+                        },
+                        delegate { bar.Close(); });
 
                     app.MainWindow = bar;
                     bar.Show();
@@ -701,6 +841,10 @@ namespace BatteryPulse
                         }
                     }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                     app.Run();
+                    Interlocked.Exchange(ref stopSignalThread, 1);
+                    try { showSignal.Set(); } catch { }
+                    try { if (signalThread.IsAlive) signalThread.Join(500); } catch { }
+                    showSignal.Dispose();
                 }
                 catch (Exception ex)
                 {
@@ -708,6 +852,16 @@ namespace BatteryPulse
                     WriteCrash(ex);
                 }
             }
+        }
+
+        private static void SignalExistingInstance()
+        {
+            try
+            {
+                using (EventWaitHandle signal = EventWaitHandle.OpenExisting(ShowSignalName))
+                    signal.Set();
+            }
+            catch { }
         }
 
         private static void WriteCrash(Exception ex)
