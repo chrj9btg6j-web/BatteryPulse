@@ -481,14 +481,14 @@ namespace BatteryPulse
             row.Children.Add(MetricTile("battery_flow", "電池流向", "#FFC6A0FF"));
             body.Children.Add(row);
 
+            AddBatterySection(body);
+
             body.Children.Add(SectionLabel("耗能排行"));
             body.Children.Add(BuildEnergyRankingBand());
 
             body.Children.Add(SectionLabel("功率變化"));
             powerChart = new TelemetryChart(TelemetryChartMode.PowerAndBattery) { Height = 310 };
             body.Children.Add(ChartBand(powerChart, false));
-
-            AddBatterySection(body);
 
             var split = TwoColumnGrid();
             Border detail = InformationBand("判讀結果", "#FF67D9B7", out pdDetailText);
@@ -525,12 +525,7 @@ namespace BatteryPulse
             header.Children.Add(ratioHeader);
             panel.Children.Add(header);
 
-            energyRankingList = new StackPanel
-            {
-                Margin = new Thickness(0, 9, 0, 0),
-                Height = 140,
-                ClipToBounds = true
-            };
+            energyRankingList = new StackPanel { Margin = new Thickness(0, 9, 0, 0) };
             panel.Children.Add(energyRankingList);
             energyRankingSource = new TextBlock
             {
