@@ -32,8 +32,8 @@ using Point = System.Windows.Point;
 [assembly: AssemblyDescription("Battery, power and temperature desktop dashboard")]
 [assembly: AssemblyCompany("彰化的驕傲")]
 [assembly: AssemblyCopyright("Copyright © 彰化的驕傲 2026")]
-[assembly: AssemblyVersion("2.2.2.1")]
-[assembly: AssemblyFileVersion("2.2.2.1")]
+[assembly: AssemblyVersion("2.2.2.2")]
+[assembly: AssemblyFileVersion("2.2.2.2")]
 
 namespace BatteryPulse
 {
@@ -1246,6 +1246,13 @@ namespace BatteryPulse
         public double? UsagePercent;
         public double? TemperatureC;
         public string UsageSource;
+        // Prefer a canonical Core/3D reading. Other engine readings such as
+        // memory, copy, and video decode can be busy without representing the
+        // adapter's overall workload.
+        public double? CoreUsagePercent;
+        public string CoreUsageSource;
+        public double? FallbackUsagePercent;
+        public string FallbackUsageSource;
         public string TemperatureSource;
     }
 
@@ -2274,20 +2281,23 @@ namespace BatteryPulse
             {
                 if (value.Value < 0 || value.Value > 100) return;
                 bool gpuHardware = HardwareTemperatureClassifier.IsGpuHardware(hardwareType, hardwareName);
-                bool gpuLoad = gpuHardware && (haystack.IndexOf("3d", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("d3d", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("core", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("gpu", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("compute", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("video decode", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("video encode", StringComparison.Ordinal) >= 0);
-                if (gpuLoad)
+                int loadPriority = gpuHardware ? GpuLoadPriority(sensorName) : 0;
+                if (loadPriority > 0)
                 {
                     GpuDeviceSnapshot gpu = GetGpuDevice(data, hardwareType, hardwareName);
-                    if (!gpu.UsagePercent.HasValue || value.Value > gpu.UsagePercent.Value)
+                    string source = "LibreHardwareMonitor / " + sensorName;
+                    if (loadPriority >= 3)
                     {
-                        gpu.UsagePercent = value.Value;
-                        gpu.UsageSource = "LibreHardwareMonitor / " + sensorName;
+                        if (!gpu.CoreUsagePercent.HasValue || value.Value > gpu.CoreUsagePercent.Value)
+                        {
+                            gpu.CoreUsagePercent = value.Value;
+                            gpu.CoreUsageSource = source;
+                        }
+                    }
+                    else if (!gpu.FallbackUsagePercent.HasValue || value.Value > gpu.FallbackUsagePercent.Value)
+                    {
+                        gpu.FallbackUsagePercent = value.Value;
+                        gpu.FallbackUsageSource = source;
                     }
                 }
                 return;
@@ -2345,6 +2355,36 @@ namespace BatteryPulse
             return created;
         }
 
+        private static int GpuLoadPriority(string sensorName)
+        {
+            string name = (sensorName ?? string.Empty).ToLowerInvariant();
+            // These are individual engines, not a reliable adapter-wide usage
+            // value. In particular, a busy memory controller previously made
+            // the top bar report 100% while Task Manager showed only a few %.
+            if (name.IndexOf("memory", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("mem ", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("copy", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("video", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("encode", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("decode", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("controller", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("blitter", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("bus", StringComparison.Ordinal) >= 0)
+                return 0;
+
+            if (name.IndexOf("gpu core", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("3d", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("d3d", StringComparison.Ordinal) >= 0)
+                return 3;
+
+            if (name.IndexOf("gpu", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("graphics", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("compute", StringComparison.Ordinal) >= 0)
+                return 2;
+
+            return name.IndexOf("core", StringComparison.Ordinal) >= 0 ? 1 : 0;
+        }
+
         private static bool IsPreferredGpuTemperature(string sensorName, double candidate, GpuDeviceSnapshot current)
         {
             string candidateName = (sensorName ?? string.Empty).ToLowerInvariant();
@@ -2360,6 +2400,20 @@ namespace BatteryPulse
 
         private static void SelectActiveGpu(BatterySnapshot data)
         {
+            foreach (GpuDeviceSnapshot item in data.GpuDevices)
+            {
+                if (item.CoreUsagePercent.HasValue)
+                {
+                    item.UsagePercent = item.CoreUsagePercent;
+                    item.UsageSource = item.CoreUsageSource;
+                }
+                else
+                {
+                    item.UsagePercent = item.FallbackUsagePercent;
+                    item.UsageSource = item.FallbackUsageSource;
+                }
+            }
+
             GpuDeviceSnapshot active = data.GpuDevices
                 .Where(delegate(GpuDeviceSnapshot item)
                 {
@@ -2849,7 +2903,9 @@ namespace BatteryPulse
     internal static class RuntimeDiagnostics
     {
         private static readonly object Sync = new object();
-        private static DateTime lastWrite = DateTime.MinValue;
+        private static readonly Dictionary<string, DateTime> LastWrites =
+            new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        private const int RepeatWriteIntervalSeconds = 60;
 
         public static void AttachGlobalHandlers()
         {
@@ -2872,12 +2928,19 @@ namespace BatteryPulse
             {
                 lock (Sync)
                 {
-                    // Avoid turning a transient sensor fault into a disk-writing loop.
-                    if ((DateTime.Now - lastWrite).TotalSeconds < 5) return;
-                    lastWrite = DateTime.Now;
+                    // A failed WMI namespace can be retried every refresh cycle.
+                    // Rate-limit each source independently so one unavailable
+                    // sensor does not create a continuous disk-writing loop.
+                    string key = string.IsNullOrWhiteSpace(stage) ? "runtime" : stage.Trim();
+                    DateTime now = DateTime.Now;
+                    DateTime previous;
+                    if (LastWrites.TryGetValue(key, out previous) &&
+                        (now - previous).TotalSeconds < RepeatWriteIntervalSeconds)
+                        return;
+                    LastWrites[key] = now;
                     string path = Path.Combine(AppSettings.AppDirectory, "runtime-diagnostics.log");
-                    string line = DateTime.Now.ToString("o", CultureInfo.InvariantCulture) +
-                        " [" + (stage ?? "runtime") + "] " + ex + Environment.NewLine;
+                    string line = now.ToString("o", CultureInfo.InvariantCulture) +
+                        " [" + key + "] " + ex + Environment.NewLine;
                     File.AppendAllText(path, line, Encoding.UTF8);
                 }
             }

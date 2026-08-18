@@ -13,10 +13,13 @@ namespace BatteryPulse
         private readonly Forms.NotifyIcon notifyIcon;
         private readonly Forms.ContextMenuStrip menu;
         private readonly System.Drawing.Icon icon;
+        private readonly Action openAdvanced;
+        private DateTime lastOpenRequestUtc = DateTime.MinValue;
         private bool disposed;
 
         public TopBarTrayIcon(Action showTopBar, Action openAdvanced, Action exit)
         {
+            this.openAdvanced = openAdvanced;
             icon = LoadApplicationIcon();
             menu = new Forms.ContextMenuStrip();
 
@@ -46,19 +49,39 @@ namespace BatteryPulse
             notifyIcon = new Forms.NotifyIcon
             {
                 Icon = icon,
-                Text = "Battery Pulse｜左鍵顯示，右鍵開啟選單",
+                Text = "Battery Pulse｜左鍵開啟進階頁面，右鍵開啟選單",
                 ContextMenuStrip = menu,
                 Visible = true
             };
+            // NotifyIcon.MouseClick can be swallowed by the shell when the
+            // notification-area flyout is open. MouseUp is the reliable
+            // single-click signal; the debounce also prevents DoubleClick
+            // from opening the dashboard twice.
+            notifyIcon.MouseUp += delegate(object sender, Forms.MouseEventArgs e)
+            {
+                if (e.Button == Forms.MouseButtons.Left) RequestOpenAdvanced();
+            };
+            notifyIcon.MouseDown += delegate(object sender, Forms.MouseEventArgs e)
+            {
+                if (e.Button == Forms.MouseButtons.Left) RequestOpenAdvanced();
+            };
             notifyIcon.MouseClick += delegate(object sender, Forms.MouseEventArgs e)
             {
-                if (e.Button == Forms.MouseButtons.Left && showTopBar != null)
-                    showTopBar();
+                if (e.Button == Forms.MouseButtons.Left) RequestOpenAdvanced();
             };
             notifyIcon.DoubleClick += delegate
             {
-                if (openAdvanced != null) openAdvanced();
+                RequestOpenAdvanced();
             };
+        }
+
+        private void RequestOpenAdvanced()
+        {
+            if (disposed || openAdvanced == null) return;
+            DateTime now = DateTime.UtcNow;
+            if ((now - lastOpenRequestUtc).TotalMilliseconds < 350) return;
+            lastOpenRequestUtc = now;
+            try { openAdvanced(); } catch { }
         }
 
         private static System.Drawing.Icon LoadApplicationIcon()
