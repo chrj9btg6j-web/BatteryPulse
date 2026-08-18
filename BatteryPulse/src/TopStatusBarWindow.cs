@@ -894,6 +894,7 @@ namespace BatteryPulse
                     TopBarTrayIcon tray = null;
                     int hostReady = 0;
                     int openRequestPending = 0;
+                    int hostShutdownRequested = 0;
                     int stopSignalThread = 0;
                     var showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowSignalName);
                     var signalThread = new Thread(new ThreadStart(delegate
@@ -956,6 +957,7 @@ namespace BatteryPulse
                                                     dashboard.OpenAdvancedDashboard();
                                                 }
                                                 catch (Exception ex) { RuntimeDiagnostics.Write("開啟進階儀表板", ex); }
+                                                finally { Interlocked.Exchange(ref openRequestPending, 0); }
                                             }), System.Windows.Threading.DispatcherPriority.Send);
                                             return;
                                         }
@@ -980,6 +982,7 @@ namespace BatteryPulse
                         try { if (tray != null) tray.Dispose(); } catch { }
                         BatteryWindow dashboard = host;
                         System.Windows.Threading.Dispatcher dispatcher = hostDispatcher;
+                        Interlocked.Exchange(ref hostShutdownRequested, 1);
                         if (dashboard != null && dispatcher != null && !dispatcher.HasShutdownStarted)
                         {
                             try
@@ -1014,6 +1017,13 @@ namespace BatteryPulse
                             hostDispatcher = dashboardDispatcher;
                             host = new BatteryWindow();
                             host.ConfigureTopBarHost(delegate { bar.ShowTopBar(); }, delegate { return bar.GetScreenWorkArea(); });
+                            host.Closing += delegate(object sender, System.ComponentModel.CancelEventArgs e)
+                            {
+                                if (Interlocked.CompareExchange(ref hostShutdownRequested, 0, 0) != 0) return;
+                                e.Cancel = true;
+                                try { host.CancelTopBarHostClose(); }
+                                catch (Exception ex) { RuntimeDiagnostics.Write("保留進階宿主視窗", ex); }
+                            };
                             host.SnapshotUpdated += delegate(BatterySnapshot data)
                             {
                                 try

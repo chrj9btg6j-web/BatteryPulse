@@ -57,6 +57,12 @@ namespace BatteryPulse
             try { Close(); } catch { }
         }
 
+        internal void CancelTopBarHostClose()
+        {
+            closing = false;
+            if (advancedMode) ReturnToWidget();
+        }
+
         private Border CreateAdvancedEntryButton()
         {
             var button = new Border
@@ -240,6 +246,7 @@ namespace BatteryPulse
                 advancedRoot.Opacity = 1;
                 advancedMode = false;
                 advancedWindowed = true;
+                closing = false;
                 WindowState = WindowState.Normal;
                 Topmost = false;
                 if (topmostMenu != null) topmostMenu.IsChecked = false;
