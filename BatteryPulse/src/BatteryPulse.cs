@@ -8,6 +8,7 @@ using System.Linq;
 using System.Management;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -31,8 +32,8 @@ using Point = System.Windows.Point;
 [assembly: AssemblyDescription("Battery, power and temperature desktop dashboard")]
 [assembly: AssemblyCompany("彰化的驕傲")]
 [assembly: AssemblyCopyright("Copyright © 彰化的驕傲 2026")]
-[assembly: AssemblyVersion("2.2.2.0")]
-[assembly: AssemblyFileVersion("2.2.2.0")]
+[assembly: AssemblyVersion("2.2.2.2")]
+[assembly: AssemblyFileVersion("2.2.2.2")]
 
 namespace BatteryPulse
 {
@@ -1245,6 +1246,13 @@ namespace BatteryPulse
         public double? UsagePercent;
         public double? TemperatureC;
         public string UsageSource;
+        // Prefer a canonical Core/3D reading. Other engine readings such as
+        // memory, copy, and video decode can be busy without representing the
+        // adapter's overall workload.
+        public double? CoreUsagePercent;
+        public string CoreUsageSource;
+        public double? FallbackUsagePercent;
+        public string FallbackUsageSource;
         public string TemperatureSource;
     }
 
@@ -2055,18 +2063,31 @@ namespace BatteryPulse
 
     public sealed class LhmReader
     {
+        private const int StartupMonitorDelaySeconds = 20;
+        private const int StartupGpuDelaySeconds = 40;
         private object computer;
         private Assembly assembly;
         private bool initialized;
         private bool resolverAttached;
+        private bool startupScheduleInitialized;
+        private DateTime monitorReadyAt = DateTime.MinValue;
+        private DateTime gpuReadyAt = DateTime.MinValue;
         private DateTime lastInitializeAttempt = DateTime.MinValue;
         private DateTime retryAfter = DateTime.MinValue;
+        private DateTime disabledUntil = DateTime.MinValue;
         private int consecutiveFailures;
         private bool initializedWithGpu;
 
+        [HandleProcessCorruptedStateExceptions]
         public void Read(BatterySnapshot data)
         {
             if (data == null) return;
+            EnsureStartupSchedule();
+            if (DateTime.Now < monitorReadyAt || DateTime.Now < disabledUntil)
+            {
+                ClearUnpairedGpuData(data);
+                return;
+            }
             if (DateTime.Now < retryAfter)
             {
                 ClearUnpairedGpuData(data);
@@ -2075,7 +2096,7 @@ namespace BatteryPulse
 
             try
             {
-                bool enableGpu = !data.DiscreteGpuUnavailable;
+                bool enableGpu = DateTime.Now >= gpuReadyAt && !data.DiscreteGpuUnavailable;
                 if (computer != null && initializedWithGpu != enableGpu)
                     InvalidateComputer();
                 EnsureInitialized(enableGpu);
@@ -2099,6 +2120,18 @@ namespace BatteryPulse
                 consecutiveFailures = 0;
                 retryAfter = DateTime.MinValue;
             }
+            catch (AccessViolationException ex)
+            {
+                // LibreHardwareMonitor can touch a driver while Windows or G-Helper
+                // is still changing GPU power state. Keep the app alive and pause the
+                // optional reader; the next refresh cycle can retry after the cooldown.
+                ClearUnpairedGpuData(data);
+                consecutiveFailures++;
+                disabledUntil = DateTime.Now.AddMinutes(2);
+                retryAfter = disabledUntil;
+                InvalidateComputer();
+                RuntimeDiagnostics.Write("LibreHardwareMonitor 記憶體存取例外，已暫停重試", ex);
+            }
             catch (Exception ex)
             {
                 ClearUnpairedGpuData(data);
@@ -2107,6 +2140,15 @@ namespace BatteryPulse
                 RuntimeDiagnostics.Write("GPU hardware re-enumeration", ex);
                 if (consecutiveFailures >= 3) InvalidateComputer();
             }
+        }
+
+        private void EnsureStartupSchedule()
+        {
+            if (startupScheduleInitialized) return;
+            startupScheduleInitialized = true;
+            DateTime now = DateTime.Now;
+            monitorReadyAt = now.AddSeconds(StartupMonitorDelaySeconds);
+            gpuReadyAt = now.AddSeconds(StartupGpuDelaySeconds);
         }
 
         private static void ClearUnpairedGpuData(BatterySnapshot data)
@@ -2239,20 +2281,23 @@ namespace BatteryPulse
             {
                 if (value.Value < 0 || value.Value > 100) return;
                 bool gpuHardware = HardwareTemperatureClassifier.IsGpuHardware(hardwareType, hardwareName);
-                bool gpuLoad = gpuHardware && (haystack.IndexOf("3d", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("d3d", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("core", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("gpu", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("compute", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("video decode", StringComparison.Ordinal) >= 0 ||
-                    haystack.IndexOf("video encode", StringComparison.Ordinal) >= 0);
-                if (gpuLoad)
+                int loadPriority = gpuHardware ? GpuLoadPriority(sensorName) : 0;
+                if (loadPriority > 0)
                 {
                     GpuDeviceSnapshot gpu = GetGpuDevice(data, hardwareType, hardwareName);
-                    if (!gpu.UsagePercent.HasValue || value.Value > gpu.UsagePercent.Value)
+                    string source = "LibreHardwareMonitor / " + sensorName;
+                    if (loadPriority >= 3)
                     {
-                        gpu.UsagePercent = value.Value;
-                        gpu.UsageSource = "LibreHardwareMonitor / " + sensorName;
+                        if (!gpu.CoreUsagePercent.HasValue || value.Value > gpu.CoreUsagePercent.Value)
+                        {
+                            gpu.CoreUsagePercent = value.Value;
+                            gpu.CoreUsageSource = source;
+                        }
+                    }
+                    else if (!gpu.FallbackUsagePercent.HasValue || value.Value > gpu.FallbackUsagePercent.Value)
+                    {
+                        gpu.FallbackUsagePercent = value.Value;
+                        gpu.FallbackUsageSource = source;
                     }
                 }
                 return;
@@ -2310,6 +2355,36 @@ namespace BatteryPulse
             return created;
         }
 
+        private static int GpuLoadPriority(string sensorName)
+        {
+            string name = (sensorName ?? string.Empty).ToLowerInvariant();
+            // These are individual engines, not a reliable adapter-wide usage
+            // value. In particular, a busy memory controller previously made
+            // the top bar report 100% while Task Manager showed only a few %.
+            if (name.IndexOf("memory", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("mem ", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("copy", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("video", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("encode", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("decode", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("controller", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("blitter", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("bus", StringComparison.Ordinal) >= 0)
+                return 0;
+
+            if (name.IndexOf("gpu core", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("3d", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("d3d", StringComparison.Ordinal) >= 0)
+                return 3;
+
+            if (name.IndexOf("gpu", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("graphics", StringComparison.Ordinal) >= 0 ||
+                name.IndexOf("compute", StringComparison.Ordinal) >= 0)
+                return 2;
+
+            return name.IndexOf("core", StringComparison.Ordinal) >= 0 ? 1 : 0;
+        }
+
         private static bool IsPreferredGpuTemperature(string sensorName, double candidate, GpuDeviceSnapshot current)
         {
             string candidateName = (sensorName ?? string.Empty).ToLowerInvariant();
@@ -2325,6 +2400,20 @@ namespace BatteryPulse
 
         private static void SelectActiveGpu(BatterySnapshot data)
         {
+            foreach (GpuDeviceSnapshot item in data.GpuDevices)
+            {
+                if (item.CoreUsagePercent.HasValue)
+                {
+                    item.UsagePercent = item.CoreUsagePercent;
+                    item.UsageSource = item.CoreUsageSource;
+                }
+                else
+                {
+                    item.UsagePercent = item.FallbackUsagePercent;
+                    item.UsageSource = item.FallbackUsageSource;
+                }
+            }
+
             GpuDeviceSnapshot active = data.GpuDevices
                 .Where(delegate(GpuDeviceSnapshot item)
                 {
@@ -2569,9 +2658,11 @@ namespace BatteryPulse
     public static class StartupManager
     {
         private const string KeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        private const string ValueName = "BatteryPulse";
+        private const string LegacyValueName = "BatteryPulse";
+        private const string TopBarValueName = "BatteryPulse.TopBar";
         private const string PreferencePath = @"Software\BatteryPulse";
         private const string FirstRunValueName = "StartupConfigured";
+        private const string EnabledValueName = "StartupEnabled";
 
         public static void EnsureFirstRun(string[] args)
         {
@@ -2579,16 +2670,32 @@ namespace BatteryPulse
 
             try
             {
+                string command = StartupCommand();
                 using (RegistryKey preferences = Registry.CurrentUser.CreateSubKey(PreferencePath))
                 {
                     if (preferences == null) throw new InvalidOperationException("Startup preference key is unavailable.");
-                    if (preferences.GetValue(FirstRunValueName) != null) return;
+
+                    bool? userChoice = ReadUserChoice(preferences);
+                    if (userChoice.HasValue && !userChoice.Value)
+                    {
+                        DeleteStartupValue(CurrentValueName);
+                        if (IsTopBarExecutable()) DeleteStartupValue(LegacyValueName);
+                        return;
+                    }
 
                     using (RegistryKey runKey = Registry.CurrentUser.CreateSubKey(KeyPath))
                     {
                         if (runKey == null) throw new InvalidOperationException("Startup registry key is unavailable.");
-                        runKey.SetValue(ValueName, StartupCommand(), RegistryValueKind.String);
+                        object existing = runKey.GetValue(CurrentValueName);
+                        if (!string.Equals(Convert.ToString(existing, CultureInfo.InvariantCulture), command, StringComparison.Ordinal))
+                            runKey.SetValue(CurrentValueName, command, RegistryValueKind.String);
+
+                        // The top-bar build is the supported startup entry. Do not let an older
+                        // standalone widget launch beside it after an update or rollback.
+                        if (IsTopBarExecutable()) runKey.DeleteValue(LegacyValueName, false);
                     }
+
+                    preferences.SetValue(EnabledValueName, 1, RegistryValueKind.DWord);
                     preferences.SetValue(FirstRunValueName, DateTime.UtcNow.ToString("O"), RegistryValueKind.String);
                 }
             }
@@ -2614,10 +2721,49 @@ namespace BatteryPulse
             return "\"" + Assembly.GetExecutingAssembly().Location + "\"";
         }
 
+        private static bool IsTopBarExecutable()
+        {
+            string fileName = Path.GetFileName(Assembly.GetExecutingAssembly().Location) ?? string.Empty;
+            return fileName.IndexOf("BatteryPulse.TopBar", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string CurrentValueName
+        {
+            get { return IsTopBarExecutable() ? TopBarValueName : LegacyValueName; }
+        }
+
+        private static bool? ReadUserChoice(RegistryKey preferences)
+        {
+            object value = preferences.GetValue(EnabledValueName);
+            if (value == null) return null;
+
+            if (value is int) return (int)value != 0;
+            bool parsedBoolean;
+            if (bool.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), out parsedBoolean))
+                return parsedBoolean;
+
+            int parsedNumber;
+            if (int.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture, out parsedNumber))
+                return parsedNumber != 0;
+            return null;
+        }
+
+        private static void DeleteStartupValue(string valueName)
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(KeyPath, true))
+            {
+                if (key != null) key.DeleteValue(valueName, false);
+            }
+        }
+
         public static bool IsEnabled()
         {
             using (RegistryKey key = Registry.CurrentUser.OpenSubKey(KeyPath, false))
-                return key != null && key.GetValue(ValueName) != null;
+            {
+                if (key == null) return false;
+                string configured = Convert.ToString(key.GetValue(CurrentValueName), CultureInfo.InvariantCulture);
+                return string.Equals(configured, StartupCommand(), StringComparison.Ordinal);
+            }
         }
 
         public static void Set(bool enabled)
@@ -2626,13 +2772,17 @@ namespace BatteryPulse
             {
                 if (key == null) throw new InvalidOperationException("Startup registry key is unavailable.");
                 if (enabled)
-                    key.SetValue(ValueName, StartupCommand(), RegistryValueKind.String);
+                {
+                    key.SetValue(CurrentValueName, StartupCommand(), RegistryValueKind.String);
+                    if (IsTopBarExecutable()) key.DeleteValue(LegacyValueName, false);
+                }
                 else
-                    key.DeleteValue(ValueName, false);
+                    key.DeleteValue(CurrentValueName, false);
             }
             using (RegistryKey preferences = Registry.CurrentUser.CreateSubKey(PreferencePath))
             {
                 if (preferences == null) throw new InvalidOperationException("Startup preference key is unavailable.");
+                preferences.SetValue(EnabledValueName, enabled ? 1 : 0, RegistryValueKind.DWord);
                 // A manual toggle is an explicit user decision, including OFF.
                 preferences.SetValue(FirstRunValueName, DateTime.UtcNow.ToString("O"), RegistryValueKind.String);
             }
@@ -2753,7 +2903,9 @@ namespace BatteryPulse
     internal static class RuntimeDiagnostics
     {
         private static readonly object Sync = new object();
-        private static DateTime lastWrite = DateTime.MinValue;
+        private static readonly Dictionary<string, DateTime> LastWrites =
+            new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        private const int RepeatWriteIntervalSeconds = 60;
 
         public static void AttachGlobalHandlers()
         {
@@ -2776,12 +2928,19 @@ namespace BatteryPulse
             {
                 lock (Sync)
                 {
-                    // Avoid turning a transient sensor fault into a disk-writing loop.
-                    if ((DateTime.Now - lastWrite).TotalSeconds < 5) return;
-                    lastWrite = DateTime.Now;
+                    // A failed WMI namespace can be retried every refresh cycle.
+                    // Rate-limit each source independently so one unavailable
+                    // sensor does not create a continuous disk-writing loop.
+                    string key = string.IsNullOrWhiteSpace(stage) ? "runtime" : stage.Trim();
+                    DateTime now = DateTime.Now;
+                    DateTime previous;
+                    if (LastWrites.TryGetValue(key, out previous) &&
+                        (now - previous).TotalSeconds < RepeatWriteIntervalSeconds)
+                        return;
+                    LastWrites[key] = now;
                     string path = Path.Combine(AppSettings.AppDirectory, "runtime-diagnostics.log");
-                    string line = DateTime.Now.ToString("o", CultureInfo.InvariantCulture) +
-                        " [" + (stage ?? "runtime") + "] " + ex + Environment.NewLine;
+                    string line = now.ToString("o", CultureInfo.InvariantCulture) +
+                        " [" + key + "] " + ex + Environment.NewLine;
                     File.AppendAllText(path, line, Encoding.UTF8);
                 }
             }

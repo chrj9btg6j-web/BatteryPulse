@@ -26,6 +26,7 @@ $outputDirectory = Split-Path -Parent $outputPath
 New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$drawing = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\System.Drawing.dll'
 $wpf = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\WPF'
 $winbase = Join-Path $wpf 'WindowsBase.dll'
 $pcore = Join-Path $wpf 'PresentationCore.dll'
@@ -45,7 +46,7 @@ if (-not (Test-Path -LiteralPath $csc)) {
     "/resource:$chargeIcon,BatteryPulse.ChargeLightning.png" `
     "/resource:$powerIcon,BatteryPulse.PowerLightning.png" `
     /reference:System.dll /reference:System.Core.dll /reference:System.Management.dll `
-    /reference:System.Windows.Forms.dll /reference:Microsoft.VisualBasic.dll `
+    "/reference:$drawing" /reference:System.Windows.Forms.dll /reference:Microsoft.VisualBasic.dll `
     "/reference:$winbase" "/reference:$pcore" "/reference:$pframe" "/reference:$systemXaml" `
     (Join-Path $sourceRoot 'BatteryPulse.cs') `
     (Join-Path $sourceRoot 'BatteryWindow.Advanced.cs') `
@@ -53,6 +54,7 @@ if (-not (Test-Path -LiteralPath $csc)) {
     (Join-Path $sourceRoot 'PerformanceReader.cs') `
     (Join-Path $sourceRoot 'BatteryLimitController.cs') `
     (Join-Path $sourceRoot 'UpdateService.cs') `
+    (Join-Path $sourceRoot 'TopBarTrayIcon.cs') `
     (Join-Path $sourceRoot 'TopStatusBarWindow.cs')
 
 if ($LASTEXITCODE -ne 0) {
