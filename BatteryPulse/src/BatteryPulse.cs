@@ -32,8 +32,8 @@ using Point = System.Windows.Point;
 [assembly: AssemblyDescription("Battery, power and temperature desktop dashboard")]
 [assembly: AssemblyCompany("彰化的驕傲")]
 [assembly: AssemblyCopyright("Copyright © 彰化的驕傲 2026")]
-[assembly: AssemblyVersion("2.2.2.2")]
-[assembly: AssemblyFileVersion("2.2.2.2")]
+[assembly: AssemblyVersion("2.2.2.6")]
+[assembly: AssemblyFileVersion("2.2.2.6")]
 
 namespace BatteryPulse
 {
@@ -1860,7 +1860,7 @@ namespace BatteryPulse
         public static readonly string[] TopBarItemIds =
         {
             "charger", "charge", "percent", "power", "cpuTemp", "gpuTemp",
-            "eta", "ram", "cpuUsage", "gpuUsage"
+            "eta", "ram", "cpuUsage", "gpuUsage", "codex"
         };
 
         public string CustomTitle = "BATTERY PULSE";
@@ -1877,7 +1877,7 @@ namespace BatteryPulse
         public bool AlertsEnabled = true;
         public string UpdateApiUrl = UpdateService.DefaultApiUrl;
         public string UpdatePageUrl = UpdateService.DefaultPageUrl;
-        public string TopBarItems = "charger,charge,percent,power,cpuTemp,gpuTemp,eta,ram,cpuUsage,gpuUsage";
+        public string TopBarItems = "charger,charge,percent,power,cpuTemp,gpuTemp,eta,ram,cpuUsage,gpuUsage,codex";
         public string TopBarHiddenItems = "ram,cpuUsage,gpuUsage";
         public bool TopBarEtaDefaultApplied;
         public double DayWh;
@@ -2042,6 +2042,7 @@ namespace BatteryPulse
                 case "ram": return "RAM 使用率";
                 case "cpuUsage": return "CPU 使用率";
                 case "gpuUsage": return "GPU 使用率";
+                case "codex": return "Codex 剩餘額度（5H／每週）";
                 default: return id;
             }
         }

@@ -6,6 +6,7 @@ BatteryPulse/releases/*/v*/installer/
 BatteryPulse/releases/*/v*/symbols/
 BatteryPulse/build/tools/
 BatteryPulse/installer-output/
+BatteryPulse/work/
 
 # .NET / Visual Studio generated files.
 **/bin/

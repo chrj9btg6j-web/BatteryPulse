@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -43,6 +44,11 @@ namespace BatteryPulse
         private readonly TextBlock ramText;
         private readonly TextBlock cpuUsageText;
         private readonly TextBlock gpuUsageText;
+        private readonly StackPanel codexUsageGroup;
+        private readonly TextBlock codexFiveHourText;
+        private readonly TextBlock codexFiveHourResetText;
+        private readonly TextBlock codexWeeklyText;
+        private readonly CodexUsageReader codexUsageReader;
         private readonly DropShadowEffect shadow;
         private readonly List<Border> layoutSpacers = new List<Border>();
         private AppSettings topBarSettings;
@@ -88,10 +94,10 @@ namespace BatteryPulse
         public TopStatusBarWindow()
         {
             Title = "Battery Pulse Top Bar";
-            Width = 720;
+            Width = 900;
             Height = 30;
             MinWidth = 560;
-            MaxWidth = 900;
+            MaxWidth = 1080;
             MinHeight = 30;
             MaxHeight = 30;
             WindowStyle = WindowStyle.None;
@@ -102,10 +108,7 @@ namespace BatteryPulse
             ShowActivated = false;
             Focusable = false;
             AllowsTransparency = true;
-            // Keep one almost-transparent composited pixel at the window root.
-            // Some Windows desktop compositions drop a fully transparent
-            // WPF top-level window before its text can be displayed.
-            Background = new SolidColorBrush(Color.FromArgb(1, 255, 255, 255));
+            Background = Brushes.Transparent;
             Opacity = 1;
             FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI");
             SnapsToDevicePixels = true;
@@ -147,6 +150,7 @@ namespace BatteryPulse
             chargePlus = TextCell("+", 11.5, FontWeights.Medium, "#FF2FAF6F");
             chargePlus.Margin = new Thickness(0, 0, 5, 0);
             chargeValue = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
+            ReserveWattsSlot(chargeValue);
             chargeGroup = MetricGroup(chargeIcon, chargePlus, chargeValue);
             statusRow.Children.Add(chargeGroup);
             chargeSpacer = Spacer(14);
@@ -159,6 +163,7 @@ namespace BatteryPulse
 
             powerIcon = IconCell(LoadIcon("BatteryPulse.PowerLightning.png"), true);
             powerValue = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
+            ReserveWattsSlot(powerValue);
             powerGroup = MetricGroup(powerIcon, powerValue);
             statusRow.Children.Add(powerGroup);
             powerSpacer = Spacer(14);
@@ -180,6 +185,25 @@ namespace BatteryPulse
             statusRow.Children.Add(cpuUsageText);
             gpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
             statusRow.Children.Add(gpuUsageText);
+            codexUsageGroup = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                IsHitTestVisible = false
+            };
+            Image codexMark = IconCell(LoadIcon("BatteryPulse.Codex.Mark.png"), false);
+            codexMark.Width = 11;
+            codexUsageGroup.Children.Add(codexMark);
+            codexFiveHourText = TextCell("--/5H", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            codexFiveHourText.Margin = new Thickness(0, 0, 8, 0);
+            codexUsageGroup.Children.Add(codexFiveHourText);
+            codexUsageGroup.Children.Add(RefreshIconCell());
+            codexFiveHourResetText = TextCell("--:--", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            codexFiveHourResetText.Margin = new Thickness(0, 0, 8, 0);
+            codexUsageGroup.Children.Add(codexFiveHourResetText);
+            codexWeeklyText = TextCell("--/M", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            codexUsageGroup.Children.Add(codexWeeklyText);
+            statusRow.Children.Add(codexUsageGroup);
 
             shell = new Border
             {
@@ -187,16 +211,27 @@ namespace BatteryPulse
                 CornerRadius = new CornerRadius(0),
                 BorderThickness = new Thickness(0),
                 BorderBrush = Brushes.Transparent,
-                // A fully transparent WPF layered window can be composed as an
-                // empty surface during cold start. Alpha 1 is visually
-                // transparent but keeps the top bar in the compositor.
-                Background = new SolidColorBrush(Color.FromArgb(1, 255, 255, 255)),
+                Background = Brushes.Transparent,
                 Effect = null,
                 Cursor = Cursors.Arrow,
                 IsHitTestVisible = false
             };
             shell.Child = statusRow;
-            Content = shell;
+            // One nearly invisible pixel keeps the layered window alive on
+            // desktops that discard fully transparent WPF surfaces. It must
+            // not tint the entire width behind the status text.
+            var transparentSurface = new Grid { Background = Brushes.Transparent, IsHitTestVisible = false };
+            transparentSurface.Children.Add(shell);
+            transparentSurface.Children.Add(new Border
+            {
+                Width = 1,
+                Height = 1,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Background = new SolidColorBrush(Color.FromArgb(1, 255, 255, 255)),
+                IsHitTestVisible = false
+            });
+            Content = transparentSurface;
             IsHitTestVisible = false;
 
             chargeIcon.Visibility = Visibility.Collapsed;
@@ -217,8 +252,20 @@ namespace BatteryPulse
             ramText.Visibility = Visibility.Collapsed;
             cpuUsageText.Visibility = Visibility.Collapsed;
             gpuUsageText.Visibility = Visibility.Collapsed;
+            codexUsageGroup.Visibility = Visibility.Collapsed;
 
             RebuildStatusLayout();
+
+            codexUsageReader = new CodexUsageReader(delegate(CodexUsageSnapshot snapshot)
+            {
+                try
+                {
+                    Dispatcher.BeginInvoke(new Action(delegate { UpdateCodexUsage(snapshot); }),
+                        System.Windows.Threading.DispatcherPriority.Background);
+                }
+                catch { }
+            });
+            codexUsageReader.SetEnabled(IsItemEnabled("codex"));
 
             visibilityGuard = new System.Windows.Threading.DispatcherTimer
             {
@@ -231,6 +278,7 @@ namespace BatteryPulse
                 PlaceAtTopCenter();
                 EnsureNativeVisibility();
                 visibilityGuard.Start();
+                codexUsageReader.Start();
                 // Keep the status bar immediately visible. A transparent-window
                 // fade can leave a layered WPF window visually absent after a
                 // cold start even though its process is still running.
@@ -246,6 +294,7 @@ namespace BatteryPulse
             {
                 closed = true;
                 visibilityGuard.Stop();
+                codexUsageReader.Dispose();
             };
         }
 
@@ -264,6 +313,9 @@ namespace BatteryPulse
                 statusRow.Children.Add(spacer);
                 statusRow.Children.Add(element);
             }
+            codexUsageGroup.Visibility = IsItemEnabled("codex")
+                ? Visibility.Visible
+                : Visibility.Collapsed;
             ApplyLayoutVisibility();
         }
 
@@ -281,6 +333,7 @@ namespace BatteryPulse
                 case "ram": return ramText;
                 case "cpuUsage": return cpuUsageText;
                 case "gpuUsage": return gpuUsageText;
+                case "codex": return codexUsageGroup;
                 default: return null;
             }
         }
@@ -308,6 +361,19 @@ namespace BatteryPulse
                 ? "BATTERY PULSE"
                 : topBarSettings.CustomTitle;
             RebuildStatusLayout();
+            codexUsageReader.SetEnabled(IsItemEnabled("codex"));
+        }
+
+        private void UpdateCodexUsage(CodexUsageSnapshot snapshot)
+        {
+            if (closed || snapshot == null) return;
+            DateTime now = DateTime.UtcNow;
+            string fiveHour = snapshot.FormatFiveHour(now);
+            codexFiveHourText.Text = fiveHour + "/5H";
+            codexFiveHourResetText.Text = fiveHour != "--" && snapshot.FiveHourResetsAtUtc.HasValue
+                ? snapshot.FiveHourResetsAtUtc.Value.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)
+                : "--:--";
+            codexWeeklyText.Text = snapshot.FormatWeekly(now) + "/M";
         }
 
         private static DateTime ReadSettingsWriteTime()
@@ -559,6 +625,47 @@ namespace BatteryPulse
                     ShadowDepth = 0,
                     Opacity = 0.9
                 };
+            }
+            return icon;
+        }
+
+        private static void ReserveWattsSlot(TextBlock value)
+        {
+            // Keep the centered status row steady as the charging or system
+            // reading changes digits. Four integer digits cover normal values.
+            value.MinWidth = 68;
+            value.TextAlignment = TextAlignment.Right;
+            Typography.SetNumeralAlignment(value, FontNumeralAlignment.Tabular);
+        }
+
+        private static Canvas RefreshIconCell()
+        {
+            var icon = new Canvas
+            {
+                Width = 11,
+                Height = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 5, 0),
+                RenderTransform = new TranslateTransform(-2, -5),
+                SnapsToDevicePixels = true,
+                IsHitTestVisible = false
+            };
+            foreach (string shape in new[]
+            {
+                "M 1.7,4.5 A 4,4 0 0 1 9,3.3 M 7.5,1.9 L 9.3,3.4 L 7.9,4.9",
+                "M 9.3,6.5 A 4,4 0 0 1 2,7.7 M 3.5,9.1 L 1.7,7.6 L 3.1,6.1"
+            })
+            {
+                icon.Children.Add(new System.Windows.Shapes.Path
+                {
+                    Data = Geometry.Parse(shape),
+                    Stroke = Brushes.White,
+                    StrokeThickness = 1.2,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    SnapsToDevicePixels = true
+                });
             }
             return icon;
         }
@@ -820,7 +927,7 @@ namespace BatteryPulse
             catch { }
 
             lastScreenWorkArea = workArea;
-            Width = Math.Min(900, Math.Max(560, placementArea.Width - 16));
+            Width = Math.Min(1080, Math.Max(560, placementArea.Width - 16));
             Left = placementArea.Left + Math.Max(0, (placementArea.Width - Width) / 2);
             Top = placementArea.Top;
         }
