@@ -1,0 +1,25 @@
+name: BatteryPulse Windows checks
+
+on:
+  push:
+    branches:
+      - release/batterypulse-2.2.2.6
+  pull_request:
+    paths:
+      - 'BatteryPulse/**'
+      - '.github/workflows/batterypulse-windows.yml'
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Codex usage parsing
+        shell: powershell
+        run: .\BatteryPulse\build\test-codex-usage.ps1
+      - name: Build top bar
+        shell: powershell
+        run: .\BatteryPulse\build\build-topbar.ps1 -OutputDir '.\BatteryPulse\dist\visual-test'
+      - name: Check transparent top bar rendering
+        shell: powershell
+        run: .\BatteryPulse\build\test-topbar-visual.ps1 -BuildDir '.\BatteryPulse\dist\visual-test'

@@ -36,6 +36,7 @@ $manifest = Join-Path $sourceRoot 'BatteryPulse.app.manifest'
 $icon = Join-Path $brandingRoot 'BatteryPulse.ProgramLogo.ico'
 $chargeIcon = Join-Path $brandingRoot 'BatteryPulse.ChargeLightning.png'
 $powerIcon = Join-Path $brandingRoot 'BatteryPulse.PowerLightning.png'
+$codexIcon = Join-Path $brandingRoot 'Codex.Mark.png'
 
 if (-not (Test-Path -LiteralPath $csc)) {
     throw "The .NET Framework C# compiler was not found: $csc"
@@ -45,7 +46,8 @@ if (-not (Test-Path -LiteralPath $csc)) {
     "/out:$outputPath" /main:BatteryPulse.TopBarProgram "/win32manifest:$manifest" "/win32icon:$icon" `
     "/resource:$chargeIcon,BatteryPulse.ChargeLightning.png" `
     "/resource:$powerIcon,BatteryPulse.PowerLightning.png" `
-    /reference:System.dll /reference:System.Core.dll /reference:System.Management.dll `
+    "/resource:$codexIcon,BatteryPulse.Codex.Mark.png" `
+    /reference:System.dll /reference:System.Core.dll /reference:System.Management.dll /reference:System.Web.Extensions.dll `
     "/reference:$drawing" /reference:System.Windows.Forms.dll /reference:Microsoft.VisualBasic.dll `
     "/reference:$winbase" "/reference:$pcore" "/reference:$pframe" "/reference:$systemXaml" `
     (Join-Path $sourceRoot 'BatteryPulse.cs') `
@@ -55,7 +57,8 @@ if (-not (Test-Path -LiteralPath $csc)) {
     (Join-Path $sourceRoot 'BatteryLimitController.cs') `
     (Join-Path $sourceRoot 'UpdateService.cs') `
     (Join-Path $sourceRoot 'TopBarTrayIcon.cs') `
-    (Join-Path $sourceRoot 'TopStatusBarWindow.cs')
+    (Join-Path $sourceRoot 'TopStatusBarWindow.cs') `
+    (Join-Path $sourceRoot 'CodexUsageReader.cs')
 
 if ($LASTEXITCODE -ne 0) {
     throw "BatteryPulse.TopBar compilation failed with exit code $LASTEXITCODE"
