@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using BatteryPulse;
@@ -63,7 +64,12 @@ internal static class TopBarVisualTests
             if (pixels[(29 * 900 * 4) + 3] != 1)
                 throw new Exception("One-pixel compositor anchor is missing.");
 
-            Console.WriteLine("Top bar empty pixels are transparent; only the compositor anchor has alpha 1.");
+            double smallWidth = MeasureChargingRow(window, surface, row, 9.9);
+            double largeWidth = MeasureChargingRow(window, surface, row, 999.9);
+            if (Math.Abs(smallWidth - largeWidth) > 0.1)
+                throw new Exception("Charging watt changes still shift the centered status row.");
+
+            Console.WriteLine("Top bar background is transparent; reset icon and charging row width are stable.");
             return 0;
         }
         catch (Exception ex)
@@ -85,5 +91,39 @@ internal static class TopBarVisualTests
         byte alpha = pixels[((y * width) + x) * 4 + 3];
         if (alpha != expected)
             throw new Exception("Unexpected alpha " + alpha + " at " + x + "," + y + ".");
+    }
+
+    private static double MeasureChargingRow(TopStatusBarWindow window, Grid surface, StackPanel row, double watts)
+    {
+        window.UpdateSnapshot(new BatterySnapshot
+        {
+            IsAcLine = true,
+            IsCharging = true,
+            Watts = watts,
+            SystemWatts = 34.4,
+            Percent = 79
+        });
+        surface.InvalidateMeasure();
+        surface.Measure(new Size(900, 30));
+        surface.Arrange(new Rect(0, 0, 900, 30));
+        surface.UpdateLayout();
+        bool found = false;
+        foreach (UIElement child in row.Children)
+        {
+            var group = child as StackPanel;
+            if (group == null || group.Visibility != Visibility.Visible) continue;
+            foreach (UIElement item in group.Children)
+            {
+                var text = item as TextBlock;
+                if (text == null || text.Text != watts.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " W")
+                    continue;
+                if (text.MinWidth < 68 || text.TextAlignment != TextAlignment.Right ||
+                    Typography.GetNumeralAlignment(text) != FontNumeralAlignment.Tabular)
+                    throw new Exception("Charging watt slot is not fixed and tabular.");
+                found = true;
+            }
+        }
+        if (!found) throw new Exception("Charging watt reading is not visible in the test row.");
+        return row.DesiredSize.Width;
     }
 }
