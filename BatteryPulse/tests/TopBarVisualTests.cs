@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -41,6 +42,18 @@ internal static class TopBarVisualTests
             var resetIcon = (Canvas)usage.Children[2];
             if (resetIcon.Width != 11 || resetIcon.Height != 11 || resetIcon.Effect != null || resetIcon.Children.Count != 2)
                 throw new Exception("Reset icon size or appearance differs from the Codex mark.");
+            var weekly = (TextBlock)usage.Children[4];
+            if (weekly.Text != "--/W")
+                throw new Exception("Weekly Codex quota is not labeled /W.");
+
+            AssertStableSlot(window, "percentText", "9%", "100%");
+            AssertStableSlot(window, "cpuText", "CPU 9 °C", "CPU 100 °C");
+            AssertStableSlot(window, "gpuText", "GPU 9 °C", "GPU 100 °C");
+            AssertStableSlot(window, "ramText", "RAM 9%", "RAM 100%");
+            AssertStableSlot(window, "cpuUsageText", "CPU 9%", "CPU 100%");
+            AssertStableSlot(window, "gpuUsageText", "GPU 9%", "GPU 100%");
+            AssertStableSlot(window, "codexFiveHourText", "9/5H", "100/5H");
+            AssertStableSlot(window, "codexWeeklyText", "9/W", "100/W");
 
             surface.Measure(new Size(900, 30));
             surface.Arrange(new Rect(0, 0, 900, 30));
@@ -69,7 +82,7 @@ internal static class TopBarVisualTests
             if (Math.Abs(smallWidth - largeWidth) > 0.1)
                 throw new Exception("Charging watt changes still shift the centered status row.");
 
-            Console.WriteLine("Top bar background is transparent; reset icon and charging row width are stable.");
+            Console.WriteLine("Top bar alpha, weekly label, reset icon, and numeric slot widths passed.");
             return 0;
         }
         catch (Exception ex)
@@ -91,6 +104,21 @@ internal static class TopBarVisualTests
         byte alpha = pixels[((y * width) + x) * 4 + 3];
         if (alpha != expected)
             throw new Exception("Unexpected alpha " + alpha + " at " + x + "," + y + ".");
+    }
+
+    private static void AssertStableSlot(TopStatusBarWindow window, string fieldName, string shortText, string longText)
+    {
+        var field = typeof(TopStatusBarWindow).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
+        if (field == null) throw new Exception("Missing status field: " + fieldName);
+        var text = field.GetValue(window) as TextBlock;
+        if (text == null) throw new Exception("Status field is not text: " + fieldName);
+        text.Text = shortText;
+        text.Measure(new Size(double.PositiveInfinity, 28));
+        double shortWidth = text.DesiredSize.Width;
+        text.Text = longText;
+        text.Measure(new Size(double.PositiveInfinity, 28));
+        if (Math.Abs(shortWidth - text.DesiredSize.Width) > 0.1)
+            throw new Exception(fieldName + " changes the centered row width as digits change.");
     }
 
     private static double MeasureChargingRow(TopStatusBarWindow window, Grid surface, StackPanel row, double watts)
@@ -117,7 +145,7 @@ internal static class TopBarVisualTests
                 var text = item as TextBlock;
                 if (text == null || text.Text != watts.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " W")
                     continue;
-                if (text.MinWidth < 68 || text.TextAlignment != TextAlignment.Right ||
+                if (text.Width < 68 || text.TextAlignment != TextAlignment.Right ||
                     Typography.GetNumeralAlignment(text) != FontNumeralAlignment.Tabular)
                     throw new Exception("Charging watt slot is not fixed and tabular.");
                 found = true;

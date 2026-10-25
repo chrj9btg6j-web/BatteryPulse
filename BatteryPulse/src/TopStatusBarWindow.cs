@@ -59,6 +59,7 @@ namespace BatteryPulse
         private Rect lastScreenWorkArea = SystemParameters.WorkArea;
         private readonly System.Windows.Threading.DispatcherTimer visibilityGuard;
         private bool closed;
+        private int placementRequest;
 
         private static readonly IntPtr HwndTopmost = new IntPtr(-1);
         private const uint SwpNoSize = 0x0001;
@@ -97,7 +98,7 @@ namespace BatteryPulse
             Width = 900;
             Height = 30;
             MinWidth = 560;
-            MaxWidth = 1080;
+            MaxWidth = 1400;
             MinHeight = 30;
             MaxHeight = 30;
             WindowStyle = WindowStyle.None;
@@ -142,6 +143,7 @@ namespace BatteryPulse
             statusRow.Children.Add(titleSpacer);
 
             chargerText = TextCell("AC?", 11.5, FontWeights.Normal, "#F2FFFFFF");
+            ReserveTextSlot(chargerText, 35);
             statusRow.Children.Add(chargerText);
             chargerSpacer = Spacer(14);
             statusRow.Children.Add(chargerSpacer);
@@ -157,6 +159,7 @@ namespace BatteryPulse
             statusRow.Children.Add(chargeSpacer);
 
             percentText = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
+            ReserveTextSlot(percentText, 38);
             statusRow.Children.Add(percentText);
             percentSpacer = Spacer(14);
             statusRow.Children.Add(percentSpacer);
@@ -170,20 +173,26 @@ namespace BatteryPulse
             statusRow.Children.Add(powerSpacer);
 
             cpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            ReserveTextSlot(cpuText, 76);
             statusRow.Children.Add(cpuText);
             cpuSpacer = Spacer(14);
             statusRow.Children.Add(cpuSpacer);
 
             gpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            ReserveTextSlot(gpuText, 76);
             statusRow.Children.Add(gpuText);
 
             etaText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            ReserveTextSlot(etaText, 86);
             statusRow.Children.Add(etaText);
             ramText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            ReserveTextSlot(ramText, 70);
             statusRow.Children.Add(ramText);
             cpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            ReserveTextSlot(cpuUsageText, 70);
             statusRow.Children.Add(cpuUsageText);
             gpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
+            ReserveTextSlot(gpuUsageText, 70);
             statusRow.Children.Add(gpuUsageText);
             codexUsageGroup = new StackPanel
             {
@@ -195,13 +204,16 @@ namespace BatteryPulse
             codexMark.Width = 11;
             codexUsageGroup.Children.Add(codexMark);
             codexFiveHourText = TextCell("--/5H", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            ReserveTextSlot(codexFiveHourText, 54);
             codexFiveHourText.Margin = new Thickness(0, 0, 8, 0);
             codexUsageGroup.Children.Add(codexFiveHourText);
             codexUsageGroup.Children.Add(RefreshIconCell());
             codexFiveHourResetText = TextCell("--:--", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            ReserveTextSlot(codexFiveHourResetText, 43);
             codexFiveHourResetText.Margin = new Thickness(0, 0, 8, 0);
             codexUsageGroup.Children.Add(codexFiveHourResetText);
-            codexWeeklyText = TextCell("--/M", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            codexWeeklyText = TextCell("--/W", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            ReserveTextSlot(codexWeeklyText, 51);
             codexUsageGroup.Children.Add(codexWeeklyText);
             statusRow.Children.Add(codexUsageGroup);
 
@@ -317,6 +329,7 @@ namespace BatteryPulse
                 ? Visibility.Visible
                 : Visibility.Collapsed;
             ApplyLayoutVisibility();
+            FitStatusRowToWindow();
         }
 
         private FrameworkElement GetItemElement(string id)
@@ -340,15 +353,22 @@ namespace BatteryPulse
 
         private void ApplyLayoutVisibility()
         {
+            bool changed = false;
             for (int i = 0; i < layoutSpacers.Count; i++)
             {
                 int childIndex = 2 + i * 2;
                 if (childIndex >= statusRow.Children.Count) break;
                 FrameworkElement item = statusRow.Children[childIndex] as FrameworkElement;
-                layoutSpacers[i].Visibility = item != null && item.Visibility == Visibility.Visible
+                Visibility next = item != null && item.Visibility == Visibility.Visible
                     ? Visibility.Visible
                     : Visibility.Collapsed;
+                if (layoutSpacers[i].Visibility != next)
+                {
+                    layoutSpacers[i].Visibility = next;
+                    changed = true;
+                }
             }
+            if (changed) FitStatusRowToWindow();
         }
 
         private void ReloadSettingsIfChanged()
@@ -373,7 +393,7 @@ namespace BatteryPulse
             codexFiveHourResetText.Text = fiveHour != "--" && snapshot.FiveHourResetsAtUtc.HasValue
                 ? snapshot.FiveHourResetsAtUtc.Value.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)
                 : "--:--";
-            codexWeeklyText.Text = snapshot.FormatWeekly(now) + "/M";
+            codexWeeklyText.Text = snapshot.FormatWeekly(now) + "/W";
         }
 
         private static DateTime ReadSettingsWriteTime()
@@ -423,7 +443,9 @@ namespace BatteryPulse
 
         public void ShowTopBar()
         {
-            EnsureVisible(true);
+            // Returning from the dashboard must not silently move the bar to
+            // whichever monitor currently contains the mouse pointer.
+            EnsureVisible(false);
         }
 
         public void EnsureVisible()
@@ -631,9 +653,14 @@ namespace BatteryPulse
 
         private static void ReserveWattsSlot(TextBlock value)
         {
-            // Keep the centered status row steady as the charging or system
-            // reading changes digits. Four integer digits cover normal values.
-            value.MinWidth = 68;
+            ReserveTextSlot(value, 72);
+        }
+
+        private static void ReserveTextSlot(TextBlock value, double width)
+        {
+            // A minimum width still allows long values to resize the centered row.
+            // Keep each changing reading in a fixed slot instead.
+            value.Width = width;
             value.TextAlignment = TextAlignment.Right;
             Typography.SetNumeralAlignment(value, FontNumeralAlignment.Tabular);
         }
@@ -697,6 +724,17 @@ namespace BatteryPulse
         private static void AddSpacer(StackPanel row, double width)
         {
             row.Children.Add(Spacer(width));
+        }
+
+        private void FitStatusRowToWindow()
+        {
+            if (statusRow == null) return;
+            statusRow.LayoutTransform = Transform.Identity;
+            statusRow.Measure(new Size(double.PositiveInfinity, 28));
+            double available = Math.Max(1, Width - 24);
+            double natural = statusRow.DesiredSize.Width;
+            double scale = natural > available ? available / natural : 1;
+            statusRow.LayoutTransform = new ScaleTransform(scale, scale);
         }
 
         private static void BeginBlink(UIElement icon, double minimumOpacity, int milliseconds)
@@ -903,33 +941,63 @@ namespace BatteryPulse
 
         private void PlaceAtTopCenter()
         {
-            Rect placementArea = SystemParameters.WorkArea;
-            Rect workArea = placementArea;
+            Forms.Screen screen = Forms.Screen.FromPoint(Forms.Control.MousePosition);
+            int request = ++placementRequest;
             try
             {
-                Forms.Screen screen = Forms.Screen.FromPoint(Forms.Control.MousePosition);
-                PresentationSource source = PresentationSource.FromVisual(this);
-                if (source != null && source.CompositionTarget != null)
+                IntPtr handle = new WindowInteropHelper(this).Handle;
+                if (handle != IntPtr.Zero)
                 {
-                    Point topLeft = source.CompositionTarget.TransformFromDevice.Transform(
-                        new Point(screen.Bounds.Left, screen.Bounds.Top));
-                    Point bottomRight = source.CompositionTarget.TransformFromDevice.Transform(
-                        new Point(screen.Bounds.Right, screen.Bounds.Bottom));
-                    placementArea = new Rect(topLeft, bottomRight);
-
-                    Point workTopLeft = source.CompositionTarget.TransformFromDevice.Transform(
-                        new Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
-                    Point workBottomRight = source.CompositionTarget.TransformFromDevice.Transform(
-                        new Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
-                    workArea = new Rect(workTopLeft, workBottomRight);
+                    // Move the native window onto the target monitor first. A
+                    // per-monitor-DPI WPF source still uses its OLD monitor's
+                    // transform until the move has been processed.
+                    int roughLeft = screen.Bounds.Left + Math.Max(0, (screen.Bounds.Width - 900) / 2);
+                    SetWindowPos(handle, IntPtr.Zero, roughLeft, screen.Bounds.Top, 0, 0,
+                        SwpNoSize | SwpNoZOrder | SwpNoActivate);
+                    Dispatcher.BeginInvoke(new Action(delegate { FinishPlacement(screen.DeviceName, request); }),
+                        System.Windows.Threading.DispatcherPriority.Loaded);
+                    return;
                 }
             }
             catch { }
 
+            FinishPlacement(screen.DeviceName, request);
+        }
+
+        private void FinishPlacement(string deviceName, int request)
+        {
+            if (closed || request != placementRequest) return;
+            Forms.Screen screen = Forms.Screen.FromPoint(Forms.Control.MousePosition);
+            foreach (Forms.Screen candidate in Forms.Screen.AllScreens)
+                if (string.Equals(candidate.DeviceName, deviceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    screen = candidate;
+                    break;
+                }
+
+            Rect placementArea = SystemParameters.WorkArea;
+            Rect workArea = placementArea;
+            PresentationSource source = PresentationSource.FromVisual(this);
+            if (source != null && source.CompositionTarget != null)
+            {
+                Point topLeft = source.CompositionTarget.TransformFromDevice.Transform(
+                    new Point(screen.Bounds.Left, screen.Bounds.Top));
+                Point bottomRight = source.CompositionTarget.TransformFromDevice.Transform(
+                    new Point(screen.Bounds.Right, screen.Bounds.Bottom));
+                placementArea = new Rect(topLeft, bottomRight);
+
+                Point workTopLeft = source.CompositionTarget.TransformFromDevice.Transform(
+                    new Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
+                Point workBottomRight = source.CompositionTarget.TransformFromDevice.Transform(
+                    new Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
+                workArea = new Rect(workTopLeft, workBottomRight);
+            }
+
             lastScreenWorkArea = workArea;
-            Width = Math.Min(1080, Math.Max(560, placementArea.Width - 16));
+            Width = Math.Min(1400, Math.Max(560, placementArea.Width - 16));
             Left = placementArea.Left + Math.Max(0, (placementArea.Width - Width) / 2);
             Top = placementArea.Top;
+            FitStatusRowToWindow();
         }
 
         private static SolidColorBrush Brush(string hex)
