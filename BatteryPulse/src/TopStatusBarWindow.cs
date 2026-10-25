@@ -6,7 +6,6 @@ using System.Reflection;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -150,7 +149,6 @@ namespace BatteryPulse
             chargePlus = TextCell("+", 11.5, FontWeights.Medium, "#FF2FAF6F");
             chargePlus.Margin = new Thickness(0, 0, 5, 0);
             chargeValue = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveWattsSlot(chargeValue);
             chargeGroup = MetricGroup(chargeIcon, chargePlus, chargeValue);
             statusRow.Children.Add(chargeGroup);
             chargeSpacer = Spacer(14);
@@ -163,7 +161,6 @@ namespace BatteryPulse
 
             powerIcon = IconCell(LoadIcon("BatteryPulse.PowerLightning.png"), true);
             powerValue = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveWattsSlot(powerValue);
             powerGroup = MetricGroup(powerIcon, powerValue);
             statusRow.Children.Add(powerGroup);
             powerSpacer = Spacer(14);
@@ -194,14 +191,14 @@ namespace BatteryPulse
             Image codexMark = IconCell(LoadIcon("BatteryPulse.Codex.Mark.png"), false);
             codexMark.Width = 11;
             codexUsageGroup.Children.Add(codexMark);
-            codexFiveHourText = TextCell("--/5H", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            codexFiveHourText = TextCell("--/5時", 11.5, FontWeights.Medium, "#FFFFFFFF");
             codexFiveHourText.Margin = new Thickness(0, 0, 8, 0);
             codexUsageGroup.Children.Add(codexFiveHourText);
             codexUsageGroup.Children.Add(RefreshIconCell());
             codexFiveHourResetText = TextCell("--:--", 11.5, FontWeights.Medium, "#FFFFFFFF");
             codexFiveHourResetText.Margin = new Thickness(0, 0, 8, 0);
             codexUsageGroup.Children.Add(codexFiveHourResetText);
-            codexWeeklyText = TextCell("--/M", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            codexWeeklyText = TextCell("--/周", 11.5, FontWeights.Medium, "#FFFFFFFF");
             codexUsageGroup.Children.Add(codexWeeklyText);
             statusRow.Children.Add(codexUsageGroup);
 
@@ -369,11 +366,11 @@ namespace BatteryPulse
             if (closed || snapshot == null) return;
             DateTime now = DateTime.UtcNow;
             string fiveHour = snapshot.FormatFiveHour(now);
-            codexFiveHourText.Text = fiveHour + "/5H";
+            codexFiveHourText.Text = fiveHour + "/5時";
             codexFiveHourResetText.Text = fiveHour != "--" && snapshot.FiveHourResetsAtUtc.HasValue
                 ? snapshot.FiveHourResetsAtUtc.Value.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)
                 : "--:--";
-            codexWeeklyText.Text = snapshot.FormatWeekly(now) + "/M";
+            codexWeeklyText.Text = snapshot.FormatWeekly(now) + "/周";
         }
 
         private static DateTime ReadSettingsWriteTime()
@@ -627,15 +624,6 @@ namespace BatteryPulse
                 };
             }
             return icon;
-        }
-
-        private static void ReserveWattsSlot(TextBlock value)
-        {
-            // Keep the centered status row steady as the charging or system
-            // reading changes digits. Four integer digits cover normal values.
-            value.MinWidth = 68;
-            value.TextAlignment = TextAlignment.Right;
-            Typography.SetNumeralAlignment(value, FontNumeralAlignment.Tabular);
         }
 
         private static Canvas RefreshIconCell()
