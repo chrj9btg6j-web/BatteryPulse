@@ -87,10 +87,10 @@ LanguageDetectionMethod=none
 
 [Languages]
 ; 四種語言都使用 Inno Setup 內建的標準按鈕、頁面與解除安裝翻譯。
-Name: "zh_TW"; MessagesFile: "{#InstallerAssetsDir}\languages\ChineseTraditional.isl"; LicenseFile: "{#InstallerAssetsDir}\InstallerLicense.zh-TW.txt"
-Name: "zh_CN"; MessagesFile: "{#InstallerAssetsDir}\languages\ChineseSimplified.isl"; LicenseFile: "{#InstallerAssetsDir}\InstallerLicense.zh-CN.txt"
-Name: "en"; MessagesFile: "{#InstallerAssetsDir}\languages\Default.isl"; LicenseFile: "{#InstallerAssetsDir}\InstallerLicense.en.txt"
-Name: "ja"; MessagesFile: "{#InstallerAssetsDir}\languages\Japanese.isl"; LicenseFile: "{#InstallerAssetsDir}\InstallerLicense.ja.txt"
+Name: "zh_TW"; MessagesFile: "{#InstallerAssetsDir}\languages\ChineseTraditional.isl"; LicenseFile: "{#SourceDir}\LICENSE"
+Name: "zh_CN"; MessagesFile: "{#InstallerAssetsDir}\languages\ChineseSimplified.isl"; LicenseFile: "{#SourceDir}\LICENSE"
+Name: "en"; MessagesFile: "{#InstallerAssetsDir}\languages\Default.isl"; LicenseFile: "{#SourceDir}\LICENSE"
+Name: "ja"; MessagesFile: "{#InstallerAssetsDir}\languages\Japanese.isl"; LicenseFile: "{#SourceDir}\LICENSE"
 
 [LangOptions]
 ; LanguageName 是語言選擇對話框中顯示的原生名稱。
@@ -170,6 +170,8 @@ Name: "desktopicon"; Description: "{cm:DesktopShortcut}"; GroupDescription: "{cm
 ; 主程式與外部程式圖示。
 Source: "{#CurrentBinDir}\{#MainExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BrandingDir}\BatteryPulse.ProgramLogo.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\LICENSING.md"; DestDir: "{app}"; Flags: ignoreversion
 
 ; BatteryPulse 會從這個資料夾載入 LibreHardwareMonitorLib.dll 及其相依檔案，
 ; 用來讀取 CPU/GPU 溫度與硬體感測數值。整個資料夾一起安裝最可靠。
