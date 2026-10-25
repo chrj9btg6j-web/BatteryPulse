@@ -51,6 +51,7 @@ namespace BatteryPulse
         private readonly CodexUsageReader codexUsageReader;
         private readonly DropShadowEffect shadow;
         private readonly List<Border> layoutSpacers = new List<Border>();
+        private readonly List<string> layoutItemIds = new List<string>();
         private AppSettings topBarSettings;
         private DateTime settingsWriteTime = DateTime.MinValue;
         private bool chargeBlinking;
@@ -143,7 +144,7 @@ namespace BatteryPulse
             statusRow.Children.Add(titleSpacer);
 
             chargerText = TextCell("AC?", 11.5, FontWeights.Normal, "#F2FFFFFF");
-            ReserveTextSlot(chargerText, 35);
+            ReserveTextSlot(chargerText, 28);
             statusRow.Children.Add(chargerText);
             chargerSpacer = Spacer(14);
             statusRow.Children.Add(chargerSpacer);
@@ -159,7 +160,7 @@ namespace BatteryPulse
             statusRow.Children.Add(chargeSpacer);
 
             percentText = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveTextSlot(percentText, 38);
+            ReserveTextSlot(percentText, 32);
             statusRow.Children.Add(percentText);
             percentSpacer = Spacer(14);
             statusRow.Children.Add(percentSpacer);
@@ -173,26 +174,26 @@ namespace BatteryPulse
             statusRow.Children.Add(powerSpacer);
 
             cpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(cpuText, 76);
+            ReserveTextSlot(cpuText, 64);
             statusRow.Children.Add(cpuText);
             cpuSpacer = Spacer(14);
             statusRow.Children.Add(cpuSpacer);
 
             gpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(gpuText, 76);
+            ReserveTextSlot(gpuText, 64);
             statusRow.Children.Add(gpuText);
 
             etaText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(etaText, 86);
+            ReserveTextSlot(etaText, 68);
             statusRow.Children.Add(etaText);
             ramText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(ramText, 70);
+            ReserveTextSlot(ramText, 60);
             statusRow.Children.Add(ramText);
             cpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(cpuUsageText, 70);
+            ReserveTextSlot(cpuUsageText, 58);
             statusRow.Children.Add(cpuUsageText);
             gpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(gpuUsageText, 70);
+            ReserveTextSlot(gpuUsageText, 58);
             statusRow.Children.Add(gpuUsageText);
             codexUsageGroup = new StackPanel
             {
@@ -200,18 +201,20 @@ namespace BatteryPulse
                 VerticalAlignment = VerticalAlignment.Center,
                 IsHitTestVisible = false
             };
-            codexUsageGroup.Children.Add(CodeUsageIconCell());
-            codexFiveHourText = TextCell("--/5H", 11.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveTextSlot(codexFiveHourText, 54);
+            Image codexMark = IconCell(LoadIcon("BatteryPulse.Codex.Mark.png"), false);
+            codexMark.Width = 11;
+            codexUsageGroup.Children.Add(codexMark);
+            codexFiveHourText = TextCell("--/5時", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            ReserveTextSlot(codexFiveHourText, 46);
             codexFiveHourText.Margin = new Thickness(0, 0, 2, 0);
             codexUsageGroup.Children.Add(codexFiveHourText);
             codexUsageGroup.Children.Add(RefreshIconCell());
             codexFiveHourResetText = TextCell("--:--", 11.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveTextSlot(codexFiveHourResetText, 43);
+            ReserveTextSlot(codexFiveHourResetText, 34);
             codexFiveHourResetText.Margin = new Thickness(0, 0, 4, 0);
             codexUsageGroup.Children.Add(codexFiveHourResetText);
-            codexWeeklyText = TextCell("--/W", 11.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveTextSlot(codexWeeklyText, 51);
+            codexWeeklyText = TextCell("--/周", 11.5, FontWeights.Medium, "#FFFFFFFF");
+            ReserveTextSlot(codexWeeklyText, 40);
             codexUsageGroup.Children.Add(codexWeeklyText);
             statusRow.Children.Add(codexUsageGroup);
 
@@ -313,6 +316,7 @@ namespace BatteryPulse
             if (statusRow == null || titleText == null || topBarSettings == null) return;
             statusRow.Children.Clear();
             layoutSpacers.Clear();
+            layoutItemIds.Clear();
             statusRow.Children.Add(titleText);
             foreach (string id in topBarSettings.GetTopBarItems())
             {
@@ -320,6 +324,7 @@ namespace BatteryPulse
                 if (element == null) continue;
                 Border spacer = Spacer(8);
                 layoutSpacers.Add(spacer);
+                layoutItemIds.Add(id);
                 statusRow.Children.Add(spacer);
                 statusRow.Children.Add(element);
             }
@@ -352,6 +357,7 @@ namespace BatteryPulse
         private void ApplyLayoutVisibility()
         {
             bool changed = false;
+            string previousCategory = null;
             for (int i = 0; i < layoutSpacers.Count; i++)
             {
                 int childIndex = 2 + i * 2;
@@ -360,6 +366,18 @@ namespace BatteryPulse
                 Visibility next = item != null && item.Visibility == Visibility.Visible
                     ? Visibility.Visible
                     : Visibility.Collapsed;
+                if (next == Visibility.Visible)
+                {
+                    string category = ItemCategory(layoutItemIds[i]);
+                    double gap = previousCategory == null ? 8 :
+                        previousCategory == category ? 4 : 14;
+                    if (Math.Abs(layoutSpacers[i].Width - gap) > 0.1)
+                    {
+                        layoutSpacers[i].Width = gap;
+                        changed = true;
+                    }
+                    previousCategory = category;
+                }
                 if (layoutSpacers[i].Visibility != next)
                 {
                     layoutSpacers[i].Visibility = next;
@@ -367,6 +385,25 @@ namespace BatteryPulse
                 }
             }
             if (changed) FitStatusRowToWindow();
+        }
+
+        private static string ItemCategory(string id)
+        {
+            switch (id)
+            {
+                case "charger":
+                case "charge":
+                case "percent":
+                case "power": return "power";
+                case "cpuTemp":
+                case "gpuTemp": return "temperature";
+                case "eta": return "runtime";
+                case "ram":
+                case "cpuUsage":
+                case "gpuUsage": return "system";
+                case "codex": return "codex";
+                default: return id;
+            }
         }
 
         private void ReloadSettingsIfChanged()
@@ -387,11 +424,11 @@ namespace BatteryPulse
             if (closed || snapshot == null) return;
             DateTime now = DateTime.UtcNow;
             string fiveHour = snapshot.FormatFiveHour(now);
-            codexFiveHourText.Text = fiveHour + "/5H";
+            codexFiveHourText.Text = fiveHour + "/5時";
             codexFiveHourResetText.Text = fiveHour != "--" && snapshot.FiveHourResetsAtUtc.HasValue
                 ? snapshot.FiveHourResetsAtUtc.Value.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)
                 : "--:--";
-            codexWeeklyText.Text = snapshot.FormatWeekly(now) + "/W";
+            codexWeeklyText.Text = snapshot.FormatWeekly(now) + "/周";
         }
 
         private static DateTime ReadSettingsWriteTime()
@@ -651,7 +688,7 @@ namespace BatteryPulse
 
         private static void ReserveWattsSlot(TextBlock value)
         {
-            ReserveTextSlot(value, 72);
+            ReserveTextSlot(value, 56);
         }
 
         private static void ReserveTextSlot(TextBlock value, double width)
@@ -661,40 +698,6 @@ namespace BatteryPulse
             value.Width = width;
             value.TextAlignment = TextAlignment.Left;
             Typography.SetNumeralAlignment(value, FontNumeralAlignment.Tabular);
-        }
-
-        private static Canvas CodeUsageIconCell()
-        {
-            // Generic </> code glyph drawn here, with no third-party image or mark.
-            var icon = new Canvas
-            {
-                Width = 11,
-                Height = 11,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 5, 0),
-                RenderTransform = new TranslateTransform(-2, -5),
-                SnapsToDevicePixels = true,
-                IsHitTestVisible = false
-            };
-            foreach (string shape in new[]
-            {
-                "M 3.5,2.2 L 1,5.5 L 3.5,8.8",
-                "M 7.5,2.2 L 10,5.5 L 7.5,8.8",
-                "M 6.6,1.9 L 4.5,9.1"
-            })
-            {
-                icon.Children.Add(new System.Windows.Shapes.Path
-                {
-                    Data = Geometry.Parse(shape),
-                    Stroke = Brushes.White,
-                    StrokeThickness = 1.2,
-                    StrokeStartLineCap = PenLineCap.Round,
-                    StrokeEndLineCap = PenLineCap.Round,
-                    StrokeLineJoin = PenLineJoin.Round,
-                    SnapsToDevicePixels = true
-                });
-            }
-            return icon;
         }
 
         private static Canvas RefreshIconCell()

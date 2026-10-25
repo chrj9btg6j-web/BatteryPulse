@@ -42,6 +42,23 @@ internal static class TopBarMonitorTests
             var row = rowField.GetValue(window) as System.Windows.Controls.StackPanel;
             foreach (System.Windows.UIElement child in row.Children)
                 child.Visibility = System.Windows.Visibility.Visible;
+            var applyVisibility = typeof(TopStatusBarWindow).GetMethod("ApplyLayoutVisibility",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            applyVisibility.Invoke(window, null);
+            var idsField = typeof(TopStatusBarWindow).GetField("layoutItemIds",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var spacersField = typeof(TopStatusBarWindow).GetField("layoutSpacers",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var ids = (System.Collections.Generic.List<string>)idsField.GetValue(window);
+            var spacers = (System.Collections.Generic.List<System.Windows.Controls.Border>)spacersField.GetValue(window);
+            int percentIndex = ids.IndexOf("percent");
+            int cpuIndex = ids.IndexOf("cpuTemp");
+            int gpuIndex = ids.IndexOf("gpuTemp");
+            int codexIndex = ids.IndexOf("codex");
+            if (percentIndex < 0 || cpuIndex < 0 || gpuIndex < 0 || codexIndex < 0 ||
+                spacers[percentIndex].Width != 4 || spacers[cpuIndex].Width != 14 ||
+                spacers[gpuIndex].Width != 4 || spacers[codexIndex].Width != 14)
+                throw new Exception("Status items are not spaced by category.");
 
             foreach (Forms.Screen screen in Forms.Screen.AllScreens)
             {
