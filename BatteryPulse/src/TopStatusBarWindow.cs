@@ -200,17 +200,15 @@ namespace BatteryPulse
                 VerticalAlignment = VerticalAlignment.Center,
                 IsHitTestVisible = false
             };
-            Image codexMark = IconCell(LoadIcon("BatteryPulse.Codex.Mark.png"), false);
-            codexMark.Width = 11;
-            codexUsageGroup.Children.Add(codexMark);
+            codexUsageGroup.Children.Add(CodeUsageIconCell());
             codexFiveHourText = TextCell("--/5H", 11.5, FontWeights.Medium, "#FFFFFFFF");
             ReserveTextSlot(codexFiveHourText, 54);
-            codexFiveHourText.Margin = new Thickness(0, 0, 8, 0);
+            codexFiveHourText.Margin = new Thickness(0, 0, 2, 0);
             codexUsageGroup.Children.Add(codexFiveHourText);
             codexUsageGroup.Children.Add(RefreshIconCell());
             codexFiveHourResetText = TextCell("--:--", 11.5, FontWeights.Medium, "#FFFFFFFF");
             ReserveTextSlot(codexFiveHourResetText, 43);
-            codexFiveHourResetText.Margin = new Thickness(0, 0, 8, 0);
+            codexFiveHourResetText.Margin = new Thickness(0, 0, 4, 0);
             codexUsageGroup.Children.Add(codexFiveHourResetText);
             codexWeeklyText = TextCell("--/W", 11.5, FontWeights.Medium, "#FFFFFFFF");
             ReserveTextSlot(codexWeeklyText, 51);
@@ -320,7 +318,7 @@ namespace BatteryPulse
             {
                 FrameworkElement element = GetItemElement(id);
                 if (element == null) continue;
-                Border spacer = Spacer(14);
+                Border spacer = Spacer(8);
                 layoutSpacers.Add(spacer);
                 statusRow.Children.Add(spacer);
                 statusRow.Children.Add(element);
@@ -661,8 +659,42 @@ namespace BatteryPulse
             // A minimum width still allows long values to resize the centered row.
             // Keep each changing reading in a fixed slot instead.
             value.Width = width;
-            value.TextAlignment = TextAlignment.Right;
+            value.TextAlignment = TextAlignment.Left;
             Typography.SetNumeralAlignment(value, FontNumeralAlignment.Tabular);
+        }
+
+        private static Canvas CodeUsageIconCell()
+        {
+            // Generic </> code glyph drawn here, with no third-party image or mark.
+            var icon = new Canvas
+            {
+                Width = 11,
+                Height = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 5, 0),
+                RenderTransform = new TranslateTransform(-2, -5),
+                SnapsToDevicePixels = true,
+                IsHitTestVisible = false
+            };
+            foreach (string shape in new[]
+            {
+                "M 3.5,2.2 L 1,5.5 L 3.5,8.8",
+                "M 7.5,2.2 L 10,5.5 L 7.5,8.8",
+                "M 6.6,1.9 L 4.5,9.1"
+            })
+            {
+                icon.Children.Add(new System.Windows.Shapes.Path
+                {
+                    Data = Geometry.Parse(shape),
+                    Stroke = Brushes.White,
+                    StrokeThickness = 1.2,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    SnapsToDevicePixels = true
+                });
+            }
+            return icon;
         }
 
         private static Canvas RefreshIconCell()
@@ -672,7 +704,7 @@ namespace BatteryPulse
                 Width = 11,
                 Height = 11,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 5, 0),
+                Margin = new Thickness(0, 0, 2, 0),
                 RenderTransform = new TranslateTransform(-2, -5),
                 SnapsToDevicePixels = true,
                 IsHitTestVisible = false
@@ -730,11 +762,7 @@ namespace BatteryPulse
         {
             if (statusRow == null) return;
             statusRow.LayoutTransform = Transform.Identity;
-            statusRow.Measure(new Size(double.PositiveInfinity, 28));
-            double available = Math.Max(1, Width - 24);
-            double natural = statusRow.DesiredSize.Width;
-            double scale = natural > available ? available / natural : 1;
-            statusRow.LayoutTransform = new ScaleTransform(scale, scale);
+            // Preserve the original font and icon size on every monitor.
         }
 
         private static void BeginBlink(UIElement icon, double minimumOpacity, int milliseconds)

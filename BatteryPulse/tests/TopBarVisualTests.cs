@@ -37,11 +37,17 @@ internal static class TopBarVisualTests
                     if (group != null && group.Children.Count == 5 && group.Children[2] is Canvas)
                         usage = group;
                 }
-            if (usage == null || !(usage.Children[1] is TextBlock) || !(usage.Children[3] is TextBlock))
+            if (usage == null || !(usage.Children[0] is Canvas) || !(usage.Children[1] is TextBlock) || !(usage.Children[3] is TextBlock))
                 throw new Exception("Reset icon is not between the five-hour quota and reset time.");
+            var codeIcon = (Canvas)usage.Children[0];
+            if (codeIcon.Width != 11 || codeIcon.Height != 11 || codeIcon.Effect != null || codeIcon.Children.Count != 3)
+                throw new Exception("Code usage icon must be an unframed monochrome vector at the reset icon's size.");
             var resetIcon = (Canvas)usage.Children[2];
             if (resetIcon.Width != 11 || resetIcon.Height != 11 || resetIcon.Effect != null || resetIcon.Children.Count != 2)
-                throw new Exception("Reset icon size or appearance differs from the Codex mark.");
+                throw new Exception("Reset icon size or appearance differs from the code usage icon.");
+            var resetTime = (TextBlock)usage.Children[3];
+            if (resetTime.TextAlignment != TextAlignment.Left)
+                throw new Exception("Reset time starts too far from its update icon.");
             var weekly = (TextBlock)usage.Children[4];
             if (weekly.Text != "--/W")
                 throw new Exception("Weekly Codex quota is not labeled /W.");
@@ -145,7 +151,7 @@ internal static class TopBarVisualTests
                 var text = item as TextBlock;
                 if (text == null || text.Text != watts.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " W")
                     continue;
-                if (text.Width < 68 || text.TextAlignment != TextAlignment.Right ||
+                if (text.Width < 68 || text.TextAlignment != TextAlignment.Left ||
                     Typography.GetNumeralAlignment(text) != FontNumeralAlignment.Tabular)
                     throw new Exception("Charging watt slot is not fixed and tabular.");
                 found = true;

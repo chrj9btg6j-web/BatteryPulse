@@ -36,7 +36,6 @@ $manifest = Join-Path $sourceRoot 'BatteryPulse.app.manifest'
 $icon = Join-Path $brandingRoot 'BatteryPulse.ProgramLogo.ico'
 $chargeIcon = Join-Path $brandingRoot 'BatteryPulse.ChargeLightning.png'
 $powerIcon = Join-Path $brandingRoot 'BatteryPulse.PowerLightning.png'
-$codexIcon = Join-Path $brandingRoot 'Codex.Mark.png'
 
 if (-not (Test-Path -LiteralPath $csc)) {
     throw "The .NET Framework C# compiler was not found: $csc"
@@ -46,7 +45,6 @@ if (-not (Test-Path -LiteralPath $csc)) {
     "/out:$outputPath" /main:BatteryPulse.TopBarProgram "/win32manifest:$manifest" "/win32icon:$icon" `
     "/resource:$chargeIcon,BatteryPulse.ChargeLightning.png" `
     "/resource:$powerIcon,BatteryPulse.PowerLightning.png" `
-    "/resource:$codexIcon,BatteryPulse.Codex.Mark.png" `
     /reference:System.dll /reference:System.Core.dll /reference:System.Management.dll /reference:System.Web.Extensions.dll `
     "/reference:$drawing" /reference:System.Windows.Forms.dll /reference:Microsoft.VisualBasic.dll `
     "/reference:$winbase" "/reference:$pcore" "/reference:$pframe" "/reference:$systemXaml" `

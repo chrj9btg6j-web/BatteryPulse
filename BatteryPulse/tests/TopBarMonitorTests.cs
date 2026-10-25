@@ -36,6 +36,13 @@ internal static class TopBarMonitorTests
             if (handle == IntPtr.Zero || requestField == null || finish == null)
                 throw new Exception("Monitor placement setup is unavailable.");
 
+            // Exercise the fully populated row, not the initially hidden startup row.
+            var rowField = typeof(TopStatusBarWindow).GetField("statusRow",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var row = rowField.GetValue(window) as System.Windows.Controls.StackPanel;
+            foreach (System.Windows.UIElement child in row.Children)
+                child.Visibility = System.Windows.Visibility.Visible;
+
             foreach (Forms.Screen screen in Forms.Screen.AllScreens)
             {
                 if (!SetWindowPos(handle, IntPtr.Zero, screen.Bounds.Left + 20,
@@ -52,7 +59,12 @@ internal static class TopBarMonitorTests
                 if (Math.Abs(actualCenter - expectedCenter) > 2)
                     throw new Exception(screen.DeviceName + " center differs by " +
                         (actualCenter - expectedCenter) + " physical pixels.");
-                Console.WriteLine(screen.DeviceName + " centered within 2 physical pixels.");
+                var scale = row.LayoutTransform as System.Windows.Media.ScaleTransform;
+                if (scale != null && scale.ScaleX < 0.999)
+                    throw new Exception(screen.DeviceName + " shrinks the original status-bar text to " + scale.ScaleX);
+                Console.WriteLine(screen.DeviceName + " centered within 2 physical pixels; window width=" +
+                    window.Width.ToString("F1") + ", row width=" + row.DesiredSize.Width.ToString("F1") +
+                    ", scale=" + (scale == null ? "1" : scale.ScaleX.ToString("F3")) + ".");
             }
             return 0;
         }
