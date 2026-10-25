@@ -6,7 +6,6 @@ using System.Reflection;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
@@ -51,7 +50,6 @@ namespace BatteryPulse
         private readonly CodexUsageReader codexUsageReader;
         private readonly DropShadowEffect shadow;
         private readonly List<Border> layoutSpacers = new List<Border>();
-        private readonly List<string> layoutItemIds = new List<string>();
         private AppSettings topBarSettings;
         private DateTime settingsWriteTime = DateTime.MinValue;
         private bool chargeBlinking;
@@ -60,7 +58,6 @@ namespace BatteryPulse
         private Rect lastScreenWorkArea = SystemParameters.WorkArea;
         private readonly System.Windows.Threading.DispatcherTimer visibilityGuard;
         private bool closed;
-        private int placementRequest;
 
         private static readonly IntPtr HwndTopmost = new IntPtr(-1);
         private const uint SwpNoSize = 0x0001;
@@ -99,7 +96,7 @@ namespace BatteryPulse
             Width = 900;
             Height = 30;
             MinWidth = 560;
-            MaxWidth = 1400;
+            MaxWidth = 1080;
             MinHeight = 30;
             MaxHeight = 30;
             WindowStyle = WindowStyle.None;
@@ -144,7 +141,6 @@ namespace BatteryPulse
             statusRow.Children.Add(titleSpacer);
 
             chargerText = TextCell("AC?", 11.5, FontWeights.Normal, "#F2FFFFFF");
-            UseTabularNumerals(chargerText);
             statusRow.Children.Add(chargerText);
             chargerSpacer = Spacer(14);
             statusRow.Children.Add(chargerSpacer);
@@ -153,47 +149,38 @@ namespace BatteryPulse
             chargePlus = TextCell("+", 11.5, FontWeights.Medium, "#FF2FAF6F");
             chargePlus.Margin = new Thickness(0, 0, 5, 0);
             chargeValue = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveWattsSlot(chargeValue);
             chargeGroup = MetricGroup(chargeIcon, chargePlus, chargeValue);
             statusRow.Children.Add(chargeGroup);
             chargeSpacer = Spacer(14);
             statusRow.Children.Add(chargeSpacer);
 
             percentText = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
-            UseTabularNumerals(percentText);
             statusRow.Children.Add(percentText);
             percentSpacer = Spacer(14);
             statusRow.Children.Add(percentSpacer);
 
             powerIcon = IconCell(LoadIcon("BatteryPulse.PowerLightning.png"), true);
             powerValue = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveWattsSlot(powerValue);
             powerGroup = MetricGroup(powerIcon, powerValue);
             statusRow.Children.Add(powerGroup);
             powerSpacer = Spacer(14);
             statusRow.Children.Add(powerSpacer);
 
             cpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            UseTabularNumerals(cpuText);
             statusRow.Children.Add(cpuText);
             cpuSpacer = Spacer(14);
             statusRow.Children.Add(cpuSpacer);
 
             gpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            UseTabularNumerals(gpuText);
             statusRow.Children.Add(gpuText);
 
             etaText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            UseTabularNumerals(etaText);
             statusRow.Children.Add(etaText);
             ramText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            UseTabularNumerals(ramText);
             statusRow.Children.Add(ramText);
             cpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            UseTabularNumerals(cpuUsageText);
             statusRow.Children.Add(cpuUsageText);
             gpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            UseTabularNumerals(gpuUsageText);
             statusRow.Children.Add(gpuUsageText);
             codexUsageGroup = new StackPanel
             {
@@ -205,16 +192,13 @@ namespace BatteryPulse
             codexMark.Width = 11;
             codexUsageGroup.Children.Add(codexMark);
             codexFiveHourText = TextCell("--/5時", 11.5, FontWeights.Medium, "#FFFFFFFF");
-            UseTabularNumerals(codexFiveHourText);
-            codexFiveHourText.Margin = new Thickness(0, 0, 2, 0);
+            codexFiveHourText.Margin = new Thickness(0, 0, 8, 0);
             codexUsageGroup.Children.Add(codexFiveHourText);
             codexUsageGroup.Children.Add(RefreshIconCell());
             codexFiveHourResetText = TextCell("--:--", 11.5, FontWeights.Medium, "#FFFFFFFF");
-            UseTabularNumerals(codexFiveHourResetText);
-            codexFiveHourResetText.Margin = new Thickness(0, 0, 4, 0);
+            codexFiveHourResetText.Margin = new Thickness(0, 0, 8, 0);
             codexUsageGroup.Children.Add(codexFiveHourResetText);
             codexWeeklyText = TextCell("--/周", 11.5, FontWeights.Medium, "#FFFFFFFF");
-            UseTabularNumerals(codexWeeklyText);
             codexUsageGroup.Children.Add(codexWeeklyText);
             statusRow.Children.Add(codexUsageGroup);
 
@@ -316,15 +300,13 @@ namespace BatteryPulse
             if (statusRow == null || titleText == null || topBarSettings == null) return;
             statusRow.Children.Clear();
             layoutSpacers.Clear();
-            layoutItemIds.Clear();
             statusRow.Children.Add(titleText);
             foreach (string id in topBarSettings.GetTopBarItems())
             {
                 FrameworkElement element = GetItemElement(id);
                 if (element == null) continue;
-                Border spacer = Spacer(8);
+                Border spacer = Spacer(14);
                 layoutSpacers.Add(spacer);
-                layoutItemIds.Add(id);
                 statusRow.Children.Add(spacer);
                 statusRow.Children.Add(element);
             }
@@ -332,7 +314,6 @@ namespace BatteryPulse
                 ? Visibility.Visible
                 : Visibility.Collapsed;
             ApplyLayoutVisibility();
-            FitStatusRowToWindow();
         }
 
         private FrameworkElement GetItemElement(string id)
@@ -356,53 +337,14 @@ namespace BatteryPulse
 
         private void ApplyLayoutVisibility()
         {
-            bool changed = false;
-            string previousCategory = null;
             for (int i = 0; i < layoutSpacers.Count; i++)
             {
                 int childIndex = 2 + i * 2;
                 if (childIndex >= statusRow.Children.Count) break;
                 FrameworkElement item = statusRow.Children[childIndex] as FrameworkElement;
-                Visibility next = item != null && item.Visibility == Visibility.Visible
+                layoutSpacers[i].Visibility = item != null && item.Visibility == Visibility.Visible
                     ? Visibility.Visible
                     : Visibility.Collapsed;
-                if (next == Visibility.Visible)
-                {
-                    string category = ItemCategory(layoutItemIds[i]);
-                    double gap = previousCategory == null ? 8 :
-                        previousCategory == category ? 4 : 14;
-                    if (Math.Abs(layoutSpacers[i].Width - gap) > 0.1)
-                    {
-                        layoutSpacers[i].Width = gap;
-                        changed = true;
-                    }
-                    previousCategory = category;
-                }
-                if (layoutSpacers[i].Visibility != next)
-                {
-                    layoutSpacers[i].Visibility = next;
-                    changed = true;
-                }
-            }
-            if (changed) FitStatusRowToWindow();
-        }
-
-        private static string ItemCategory(string id)
-        {
-            switch (id)
-            {
-                case "charger":
-                case "charge":
-                case "percent":
-                case "power": return "power";
-                case "cpuTemp":
-                case "gpuTemp": return "temperature";
-                case "eta": return "runtime";
-                case "ram":
-                case "cpuUsage":
-                case "gpuUsage": return "system";
-                case "codex": return "codex";
-                default: return id;
             }
         }
 
@@ -478,9 +420,7 @@ namespace BatteryPulse
 
         public void ShowTopBar()
         {
-            // Returning from the dashboard must not silently move the bar to
-            // whichever monitor currently contains the mouse pointer.
-            EnsureVisible(false);
+            EnsureVisible(true);
         }
 
         public void EnsureVisible()
@@ -686,19 +626,6 @@ namespace BatteryPulse
             return icon;
         }
 
-        private static void ReserveWattsSlot(TextBlock value)
-        {
-            // Only wattage needs a little extra room; reserving every reading
-            // made the whole status row look widely spaced.
-            value.Width = 49;
-            UseTabularNumerals(value);
-        }
-
-        private static void UseTabularNumerals(TextBlock value)
-        {
-            Typography.SetNumeralAlignment(value, FontNumeralAlignment.Tabular);
-        }
-
         private static Canvas RefreshIconCell()
         {
             var icon = new Canvas
@@ -706,7 +633,7 @@ namespace BatteryPulse
                 Width = 11,
                 Height = 11,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 2, 0),
+                Margin = new Thickness(0, 0, 5, 0),
                 RenderTransform = new TranslateTransform(-2, -5),
                 SnapsToDevicePixels = true,
                 IsHitTestVisible = false
@@ -758,13 +685,6 @@ namespace BatteryPulse
         private static void AddSpacer(StackPanel row, double width)
         {
             row.Children.Add(Spacer(width));
-        }
-
-        private void FitStatusRowToWindow()
-        {
-            if (statusRow == null) return;
-            statusRow.LayoutTransform = Transform.Identity;
-            // Preserve the original font and icon size on every monitor.
         }
 
         private static void BeginBlink(UIElement icon, double minimumOpacity, int milliseconds)
@@ -971,63 +891,33 @@ namespace BatteryPulse
 
         private void PlaceAtTopCenter()
         {
-            Forms.Screen screen = Forms.Screen.FromPoint(Forms.Control.MousePosition);
-            int request = ++placementRequest;
+            Rect placementArea = SystemParameters.WorkArea;
+            Rect workArea = placementArea;
             try
             {
-                IntPtr handle = new WindowInteropHelper(this).Handle;
-                if (handle != IntPtr.Zero)
+                Forms.Screen screen = Forms.Screen.FromPoint(Forms.Control.MousePosition);
+                PresentationSource source = PresentationSource.FromVisual(this);
+                if (source != null && source.CompositionTarget != null)
                 {
-                    // Move the native window onto the target monitor first. A
-                    // per-monitor-DPI WPF source still uses its OLD monitor's
-                    // transform until the move has been processed.
-                    int roughLeft = screen.Bounds.Left + Math.Max(0, (screen.Bounds.Width - 900) / 2);
-                    SetWindowPos(handle, IntPtr.Zero, roughLeft, screen.Bounds.Top, 0, 0,
-                        SwpNoSize | SwpNoZOrder | SwpNoActivate);
-                    Dispatcher.BeginInvoke(new Action(delegate { FinishPlacement(screen.DeviceName, request); }),
-                        System.Windows.Threading.DispatcherPriority.Loaded);
-                    return;
+                    Point topLeft = source.CompositionTarget.TransformFromDevice.Transform(
+                        new Point(screen.Bounds.Left, screen.Bounds.Top));
+                    Point bottomRight = source.CompositionTarget.TransformFromDevice.Transform(
+                        new Point(screen.Bounds.Right, screen.Bounds.Bottom));
+                    placementArea = new Rect(topLeft, bottomRight);
+
+                    Point workTopLeft = source.CompositionTarget.TransformFromDevice.Transform(
+                        new Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
+                    Point workBottomRight = source.CompositionTarget.TransformFromDevice.Transform(
+                        new Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
+                    workArea = new Rect(workTopLeft, workBottomRight);
                 }
             }
             catch { }
 
-            FinishPlacement(screen.DeviceName, request);
-        }
-
-        private void FinishPlacement(string deviceName, int request)
-        {
-            if (closed || request != placementRequest) return;
-            Forms.Screen screen = Forms.Screen.FromPoint(Forms.Control.MousePosition);
-            foreach (Forms.Screen candidate in Forms.Screen.AllScreens)
-                if (string.Equals(candidate.DeviceName, deviceName, StringComparison.OrdinalIgnoreCase))
-                {
-                    screen = candidate;
-                    break;
-                }
-
-            Rect placementArea = SystemParameters.WorkArea;
-            Rect workArea = placementArea;
-            PresentationSource source = PresentationSource.FromVisual(this);
-            if (source != null && source.CompositionTarget != null)
-            {
-                Point topLeft = source.CompositionTarget.TransformFromDevice.Transform(
-                    new Point(screen.Bounds.Left, screen.Bounds.Top));
-                Point bottomRight = source.CompositionTarget.TransformFromDevice.Transform(
-                    new Point(screen.Bounds.Right, screen.Bounds.Bottom));
-                placementArea = new Rect(topLeft, bottomRight);
-
-                Point workTopLeft = source.CompositionTarget.TransformFromDevice.Transform(
-                    new Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
-                Point workBottomRight = source.CompositionTarget.TransformFromDevice.Transform(
-                    new Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
-                workArea = new Rect(workTopLeft, workBottomRight);
-            }
-
             lastScreenWorkArea = workArea;
-            Width = Math.Min(1400, Math.Max(560, placementArea.Width - 16));
+            Width = Math.Min(1080, Math.Max(560, placementArea.Width - 16));
             Left = placementArea.Left + Math.Max(0, (placementArea.Width - Width) / 2);
             Top = placementArea.Top;
-            FitStatusRowToWindow();
         }
 
         private static SolidColorBrush Brush(string hex)

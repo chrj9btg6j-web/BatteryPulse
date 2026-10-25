@@ -40,8 +40,6 @@ New-Item -ItemType Directory -Path $binDir, $installerDir, $symbolsDir -Force | 
 
 $releaseExe = Join-Path $binDir ("BatteryPulse.TopBar-v{0}-{1}.exe" -f $Version, $stamp)
 Copy-Item -LiteralPath $currentExe -Destination $releaseExe
-Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination (Join-Path $releaseRoot 'LICENSE')
-Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSING.md') -Destination (Join-Path $releaseRoot 'LICENSING.md')
 
 $currentPdb = Join-Path $currentDir 'BatteryPulse.TopBar.pdb'
 if (Test-Path -LiteralPath $currentPdb) {

@@ -1,9 +1,7 @@
 using System;
 using System.IO;
-using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using BatteryPulse;
@@ -37,27 +35,13 @@ internal static class TopBarVisualTests
                     if (group != null && group.Children.Count == 5 && group.Children[2] is Canvas)
                         usage = group;
                 }
-            if (usage == null || !(usage.Children[0] is Image) || !(usage.Children[1] is TextBlock) || !(usage.Children[3] is TextBlock))
+            if (usage == null || !(usage.Children[1] is TextBlock) || !(usage.Children[3] is TextBlock))
                 throw new Exception("Reset icon is not between the five-hour quota and reset time.");
-            var codexIcon = (Image)usage.Children[0];
-            if (codexIcon.Width != 11 || codexIcon.Height != 11 || codexIcon.Effect != null || codexIcon.Source == null)
-                throw new Exception("Codex icon must be visible without a frame or shadow at reset icon size.");
             var resetIcon = (Canvas)usage.Children[2];
             if (resetIcon.Width != 11 || resetIcon.Height != 11 || resetIcon.Effect != null || resetIcon.Children.Count != 2)
-                throw new Exception("Reset icon size or appearance differs from the Codex icon.");
-            var resetTime = (TextBlock)usage.Children[3];
-            if (resetTime.TextAlignment != TextAlignment.Left)
-                throw new Exception("Reset time starts too far from its update icon.");
-            var weekly = (TextBlock)usage.Children[4];
-            if (weekly.Text != "--/周")
-                throw new Exception("Weekly Codex quota is not labeled /周.");
-
-            foreach (string name in new[] { "percentText", "cpuText", "gpuText", "etaText",
-                "ramText", "cpuUsageText", "gpuUsageText", "codexFiveHourText",
-                "codexFiveHourResetText", "codexWeeklyText" })
-                AssertNaturalWidth(window, name);
-            AssertSlotFits(window, "chargeValue", "999.9 W");
-            AssertSlotFits(window, "powerValue", "999.9 W");
+                throw new Exception("Reset icon size or appearance differs from the Codex mark.");
+            if (((TextBlock)usage.Children[1]).Text != "--/5時" || ((TextBlock)usage.Children[4]).Text != "--/周")
+                throw new Exception("Codex quota labels differ from /5時 and /周.");
 
             surface.Measure(new Size(900, 30));
             surface.Arrange(new Rect(0, 0, 900, 30));
@@ -81,12 +65,7 @@ internal static class TopBarVisualTests
             if (pixels[(29 * 900 * 4) + 3] != 1)
                 throw new Exception("One-pixel compositor anchor is missing.");
 
-            double smallWidth = MeasureChargingRow(window, surface, row, 9.9);
-            double largeWidth = MeasureChargingRow(window, surface, row, 999.9);
-            if (Math.Abs(smallWidth - largeWidth) > 0.1)
-                throw new Exception("Charging watt changes still shift the centered status row.");
-
-            Console.WriteLine("Top bar alpha, Chinese labels, reset icon, and watt-only reserve passed.");
+            Console.WriteLine("Top bar empty pixels are transparent; only the compositor anchor has alpha 1.");
             return 0;
         }
         catch (Exception ex)
@@ -108,66 +87,5 @@ internal static class TopBarVisualTests
         byte alpha = pixels[((y * width) + x) * 4 + 3];
         if (alpha != expected)
             throw new Exception("Unexpected alpha " + alpha + " at " + x + "," + y + ".");
-    }
-
-    private static void AssertNaturalWidth(TopStatusBarWindow window, string fieldName)
-    {
-        var field = typeof(TopStatusBarWindow).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
-        if (field == null) throw new Exception("Missing status field: " + fieldName);
-        var text = field.GetValue(window) as TextBlock;
-        if (text == null) throw new Exception("Status field is not text: " + fieldName);
-        if (!double.IsNaN(text.Width) ||
-            Typography.GetNumeralAlignment(text) != FontNumeralAlignment.Tabular)
-            throw new Exception(fieldName + " has an unnecessary fixed-width gap.");
-    }
-
-    private static void AssertSlotFits(TopStatusBarWindow window, string fieldName, string sample)
-    {
-        var field = typeof(TopStatusBarWindow).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
-        var value = field.GetValue(window) as TextBlock;
-        double reservedWidth = value.Width;
-        string originalText = value.Text;
-        value.Width = double.NaN;
-        value.Text = sample;
-        value.Measure(new Size(double.PositiveInfinity, 28));
-        double neededWidth = value.DesiredSize.Width;
-        value.Width = reservedWidth;
-        value.Text = originalText;
-        if (neededWidth > reservedWidth - 1)
-            throw new Exception(fieldName + " clips " + sample + " (" + neededWidth + " > " + reservedWidth + ").");
-    }
-
-    private static double MeasureChargingRow(TopStatusBarWindow window, Grid surface, StackPanel row, double watts)
-    {
-        window.UpdateSnapshot(new BatterySnapshot
-        {
-            IsAcLine = true,
-            IsCharging = true,
-            Watts = watts,
-            SystemWatts = 34.4,
-            Percent = 79
-        });
-        surface.InvalidateMeasure();
-        surface.Measure(new Size(900, 30));
-        surface.Arrange(new Rect(0, 0, 900, 30));
-        surface.UpdateLayout();
-        bool found = false;
-        foreach (UIElement child in row.Children)
-        {
-            var group = child as StackPanel;
-            if (group == null || group.Visibility != Visibility.Visible) continue;
-            foreach (UIElement item in group.Children)
-            {
-                var text = item as TextBlock;
-                if (text == null || text.Text != watts.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " W")
-                    continue;
-                if (text.Width < 49 || text.Width > 50 || text.TextAlignment != TextAlignment.Left ||
-                    Typography.GetNumeralAlignment(text) != FontNumeralAlignment.Tabular)
-                    throw new Exception("Charging watt slot is not fixed and tabular.");
-                found = true;
-            }
-        }
-        if (!found) throw new Exception("Charging watt reading is not visible in the test row.");
-        return row.DesiredSize.Width;
     }
 }
