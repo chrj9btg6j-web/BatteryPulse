@@ -144,7 +144,7 @@ namespace BatteryPulse
             statusRow.Children.Add(titleSpacer);
 
             chargerText = TextCell("AC?", 11.5, FontWeights.Normal, "#F2FFFFFF");
-            ReserveTextSlot(chargerText, 28);
+            UseTabularNumerals(chargerText);
             statusRow.Children.Add(chargerText);
             chargerSpacer = Spacer(14);
             statusRow.Children.Add(chargerSpacer);
@@ -160,7 +160,7 @@ namespace BatteryPulse
             statusRow.Children.Add(chargeSpacer);
 
             percentText = TextCell(string.Empty, 12.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveTextSlot(percentText, 32);
+            UseTabularNumerals(percentText);
             statusRow.Children.Add(percentText);
             percentSpacer = Spacer(14);
             statusRow.Children.Add(percentSpacer);
@@ -174,26 +174,26 @@ namespace BatteryPulse
             statusRow.Children.Add(powerSpacer);
 
             cpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(cpuText, 64);
+            UseTabularNumerals(cpuText);
             statusRow.Children.Add(cpuText);
             cpuSpacer = Spacer(14);
             statusRow.Children.Add(cpuSpacer);
 
             gpuText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(gpuText, 64);
+            UseTabularNumerals(gpuText);
             statusRow.Children.Add(gpuText);
 
             etaText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(etaText, 68);
+            UseTabularNumerals(etaText);
             statusRow.Children.Add(etaText);
             ramText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(ramText, 60);
+            UseTabularNumerals(ramText);
             statusRow.Children.Add(ramText);
             cpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(cpuUsageText, 58);
+            UseTabularNumerals(cpuUsageText);
             statusRow.Children.Add(cpuUsageText);
             gpuUsageText = TextCell(string.Empty, 11.5, FontWeights.Normal, "#E8FFFFFF");
-            ReserveTextSlot(gpuUsageText, 58);
+            UseTabularNumerals(gpuUsageText);
             statusRow.Children.Add(gpuUsageText);
             codexUsageGroup = new StackPanel
             {
@@ -205,16 +205,16 @@ namespace BatteryPulse
             codexMark.Width = 11;
             codexUsageGroup.Children.Add(codexMark);
             codexFiveHourText = TextCell("--/5時", 11.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveTextSlot(codexFiveHourText, 46);
+            UseTabularNumerals(codexFiveHourText);
             codexFiveHourText.Margin = new Thickness(0, 0, 2, 0);
             codexUsageGroup.Children.Add(codexFiveHourText);
             codexUsageGroup.Children.Add(RefreshIconCell());
             codexFiveHourResetText = TextCell("--:--", 11.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveTextSlot(codexFiveHourResetText, 34);
+            UseTabularNumerals(codexFiveHourResetText);
             codexFiveHourResetText.Margin = new Thickness(0, 0, 4, 0);
             codexUsageGroup.Children.Add(codexFiveHourResetText);
             codexWeeklyText = TextCell("--/周", 11.5, FontWeights.Medium, "#FFFFFFFF");
-            ReserveTextSlot(codexWeeklyText, 40);
+            UseTabularNumerals(codexWeeklyText);
             codexUsageGroup.Children.Add(codexWeeklyText);
             statusRow.Children.Add(codexUsageGroup);
 
@@ -688,15 +688,14 @@ namespace BatteryPulse
 
         private static void ReserveWattsSlot(TextBlock value)
         {
-            ReserveTextSlot(value, 56);
+            // Only wattage needs a little extra room; reserving every reading
+            // made the whole status row look widely spaced.
+            value.Width = 49;
+            UseTabularNumerals(value);
         }
 
-        private static void ReserveTextSlot(TextBlock value, double width)
+        private static void UseTabularNumerals(TextBlock value)
         {
-            // A minimum width still allows long values to resize the centered row.
-            // Keep each changing reading in a fixed slot instead.
-            value.Width = width;
-            value.TextAlignment = TextAlignment.Left;
             Typography.SetNumeralAlignment(value, FontNumeralAlignment.Tabular);
         }
 

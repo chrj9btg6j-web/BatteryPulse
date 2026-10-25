@@ -52,20 +52,12 @@ internal static class TopBarVisualTests
             if (weekly.Text != "--/周")
                 throw new Exception("Weekly Codex quota is not labeled /周.");
 
-            AssertStableSlot(window, "percentText", "9%", "100%");
-            AssertStableSlot(window, "cpuText", "CPU 9 °C", "CPU 100 °C");
-            AssertStableSlot(window, "gpuText", "GPU 9 °C", "GPU 100 °C");
-            AssertStableSlot(window, "ramText", "RAM 9%", "RAM 100%");
-            AssertStableSlot(window, "cpuUsageText", "CPU 9%", "CPU 100%");
-            AssertStableSlot(window, "gpuUsageText", "GPU 9%", "GPU 100%");
-            AssertStableSlot(window, "codexFiveHourText", "9/5時", "100/5時");
-            AssertStableSlot(window, "codexWeeklyText", "9/周", "100/周");
-            AssertSlotFits(window, "chargeValue", "9999.9 W");
-            AssertSlotFits(window, "powerValue", "9999.9 W");
-            AssertSlotFits(window, "etaText", "續航 999h59");
-            AssertSlotFits(window, "codexFiveHourText", "100/5時");
-            AssertSlotFits(window, "codexFiveHourResetText", "23:59");
-            AssertSlotFits(window, "codexWeeklyText", "100/周");
+            foreach (string name in new[] { "percentText", "cpuText", "gpuText", "etaText",
+                "ramText", "cpuUsageText", "gpuUsageText", "codexFiveHourText",
+                "codexFiveHourResetText", "codexWeeklyText" })
+                AssertNaturalWidth(window, name);
+            AssertSlotFits(window, "chargeValue", "999.9 W");
+            AssertSlotFits(window, "powerValue", "999.9 W");
 
             surface.Measure(new Size(900, 30));
             surface.Arrange(new Rect(0, 0, 900, 30));
@@ -94,7 +86,7 @@ internal static class TopBarVisualTests
             if (Math.Abs(smallWidth - largeWidth) > 0.1)
                 throw new Exception("Charging watt changes still shift the centered status row.");
 
-            Console.WriteLine("Top bar alpha, weekly label, reset icon, and numeric slot widths passed.");
+            Console.WriteLine("Top bar alpha, Chinese labels, reset icon, and watt-only reserve passed.");
             return 0;
         }
         catch (Exception ex)
@@ -118,19 +110,15 @@ internal static class TopBarVisualTests
             throw new Exception("Unexpected alpha " + alpha + " at " + x + "," + y + ".");
     }
 
-    private static void AssertStableSlot(TopStatusBarWindow window, string fieldName, string shortText, string longText)
+    private static void AssertNaturalWidth(TopStatusBarWindow window, string fieldName)
     {
         var field = typeof(TopStatusBarWindow).GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
         if (field == null) throw new Exception("Missing status field: " + fieldName);
         var text = field.GetValue(window) as TextBlock;
         if (text == null) throw new Exception("Status field is not text: " + fieldName);
-        text.Text = shortText;
-        text.Measure(new Size(double.PositiveInfinity, 28));
-        double shortWidth = text.DesiredSize.Width;
-        text.Text = longText;
-        text.Measure(new Size(double.PositiveInfinity, 28));
-        if (Math.Abs(shortWidth - text.DesiredSize.Width) > 0.1)
-            throw new Exception(fieldName + " changes the centered row width as digits change.");
+        if (!double.IsNaN(text.Width) ||
+            Typography.GetNumeralAlignment(text) != FontNumeralAlignment.Tabular)
+            throw new Exception(fieldName + " has an unnecessary fixed-width gap.");
     }
 
     private static void AssertSlotFits(TopStatusBarWindow window, string fieldName, string sample)
@@ -173,7 +161,7 @@ internal static class TopBarVisualTests
                 var text = item as TextBlock;
                 if (text == null || text.Text != watts.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " W")
                     continue;
-                if (text.Width < 54 || text.TextAlignment != TextAlignment.Left ||
+                if (text.Width < 49 || text.Width > 50 || text.TextAlignment != TextAlignment.Left ||
                     Typography.GetNumeralAlignment(text) != FontNumeralAlignment.Tabular)
                     throw new Exception("Charging watt slot is not fixed and tabular.");
                 found = true;
